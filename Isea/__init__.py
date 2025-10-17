@@ -9,6 +9,9 @@ from .graphs import (
     WorldRenewable,
     BubblePack 
 )
+from .layouts import LinkedEnergyDashboard
+
+
 
 __all__ = [
     "__version__",
@@ -19,3 +22,4 @@ __all__ = [
     "WorldRenewable",
     "BubblePack"
 ]
+__all__ += ["LinkedEnergyDashboard"]
