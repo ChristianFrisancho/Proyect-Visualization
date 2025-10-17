@@ -1343,3 +1343,298 @@ def RadialStackedBar(
 """
     display(Javascript(js))
     return HTML(f"<small>Radial Stacked Bar Chart listo (#{uid})</small>")
+########alex
+def WorldRenewable(
+    df,
+    year_cols=None,                 # si None: detecta columnas Fxxxx
+    country_col="Country",
+    iso3_col="ISO3",
+    tech_col="Technology_std",      # valores: Solar/Wind/Hydro/Bio/Fossil
+    start_year=None,                # ej. "F2023" (si None usa último)
+    width=1200,
+    height=660,
+    normalize=False,                # reservado para extensiones futuras
+):
+    """
+    Coropleta mundial (% renovable) + línea temporal por país.
+    - Fuente: df con columnas Fxxxx y Technology_std en {Solar, Wind, Hydro, Bio, Fossil}
+    - GeoJSON: Isea/assets/world.geojson (debe estar empaquetado)
+    """
+    import json, uuid, math
+    import pandas as pd
+    from IPython.display import HTML, Javascript, display
+    from importlib.resources import files
+
+    # --- 1) Detectar años ---
+    if year_cols is None:
+        year_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("F")]
+    if not year_cols:
+        raise ValueError("No se encontraron columnas de año (F2000..F2023).")
+
+    # --- 2) Asegurar numéricos ---
+    df = df.copy()
+    for c in year_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # --- 3) Mantener solo las 5 tecnologías ---
+    tech_keep = ["Solar", "Wind", "Hydro", "Bio", "Fossil"]
+    d = df[df[tech_col].isin(tech_keep)][[country_col, iso3_col, tech_col] + year_cols].copy()
+
+    # --- 4) Agregar por país+tecnología ---
+    agg = d.groupby([country_col, iso3_col, tech_col])[year_cols].sum(min_count=1).reset_index()
+
+    # --- 5) Construir % renovable por país y año ---
+    countries = agg[[country_col, iso3_col]].drop_duplicates().values.tolist()
+    years = list(year_cols)
+    if start_year is None or start_year not in years:
+        start_year = years[-1]
+
+    records = []  # [{iso3, name, shares:[0..1 or None]}]
+    for name, iso3 in countries:
+        block = agg[agg[iso3_col] == iso3]
+        vals = {}
+        for t in tech_keep:
+            r = block[block[tech_col] == t]
+            if r.empty:
+                vals[t] = {y: 0.0 for y in years}
+            else:
+                s = r.iloc[0][years].to_dict()
+                vals[t] = {y: float(s.get(y, 0.0)) if pd.notna(s.get(y, None)) else 0.0 for y in years}
+
+        shares = []
+        for y in years:
+            ren = vals["Solar"][y] + vals["Wind"][y] + vals["Hydro"][y] + vals["Bio"][y]
+            tot = ren + vals["Fossil"][y]
+            shares.append((ren / tot) if (tot and not math.isclose(tot, 0.0)) else None)
+
+        records.append({"iso3": iso3, "name": name, "shares": shares})
+
+    idx_now = years.index(start_year)
+
+    # --- 6) Cargar world.geojson desde el paquete y parsear en Python ---
+    try:
+        world_text = (files("Isea.assets") / "world.geojson").read_text(encoding="utf-8")
+        world_obj  = json.loads(world_text)
+    except Exception as e:
+        raise FileNotFoundError(
+            "No se pudo leer Isea/assets/world.geojson. "
+            "Colócalo en Isea/assets/ y en pyproject.toml incluye 'Isea/assets/**'."
+        ) from e
+
+    # --- 7) Payload para JS ---
+    payload = {
+        "years": years,
+        "idx_now": idx_now,
+        "records": records,
+    }
+
+    uid = f"wrld-{uuid.uuid4().hex[:8]}"
+
+    # Contenedor
+    display(HTML(f"""
+<div id="{uid}" class="vis"></div>
+<div id="{uid}-status" class="status">Renderizando…</div>
+<style>
+  .vis {{ width: 100%; min-height: 80px; }}
+  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
+</style>
+"""))
+
+    # --- 8) JavaScript (sin f-string). Usamos placeholders y los reemplazamos al final. ---
+    js = r"""
+(async () => {
+  const status = document.getElementById("__UID__-status");
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    const d3  = mod.default ?? mod;
+
+    const world = __WORLDOBJ__;         // GeoJSON ya como objeto
+    const pack  = __PAYLOAD__;          // { years, idx_now, records }
+
+    let YEARS = pack.years;
+    let idx   = +pack.idx_now;
+    const REC = pack.records;
+
+    const W = __WIDTH__, H = __HEIGHT__;
+    const m = { top: 72, right: 28, bottom: 46, left: 28 };
+    const iW = W - m.left - m.right;
+    const mapH  = Math.floor(H*0.62);
+    const lineH = H - mapH - 32;
+
+    const root = d3.select("#__UID__");
+    root.html("");
+
+    // Título + ayuda
+    root.append("div")
+      .style("font","600 16px/1.3 sans-serif")
+      .style("color","#e5e7eb")
+      .style("margin","0 0 6px 6px")
+      .text("Participación de renovables en la capacidad instalada por país");
+
+    root.append("div")
+      .style("font","12px/1.35 sans-serif")
+      .style("color","#94a3b8")
+      .style("margin","0 0 8px 6px")
+      .text("Coropleta (0–100%). Desliza el año. Haz clic en un país para ver su serie temporal. Fuente: Solar/Wind/Hydro/Bio/Fossil.");
+
+    // Controles
+    const controls = root.append("div")
+      .style("display","flex")
+      .style("gap","12px")
+      .style("align-items","center")
+      .style("margin","6px 0 10px 6px");
+
+    controls.append("span").style("color","#cbd5e1").style("font","12px sans-serif").text("Año:");
+    const slider = controls.append("input").attr("type","range")
+      .attr("min", 0).attr("max", YEARS.length - 1)
+      .attr("value", idx)
+      .style("width","340px");
+    const yearLbl = controls.append("span").style("color","#e5e7eb").style("font","12px sans-serif").text(YEARS[idx]);
+
+    // SVG MAPA
+    const svg = root.append("svg").attr("width", W).attr("height", mapH);
+    const g   = svg.append("g").attr("transform", `translate(${m.left},${m.top})`);
+
+    const proj = d3.geoNaturalEarth1().fitExtent([[0,0],[iW, mapH - m.top - m.bottom]], world);
+    const path = d3.geoPath(proj);
+
+    const fmtPct = d3.format(".0%");
+
+    // Color 0..1
+    const col = d3.scaleSequential(d3.interpolateYlGn).domain([0,1]);
+
+    // ISO key flexible
+    const isoKey = f => f.properties?.ISO_A3
+                     || f.properties?.ADM0_A3
+                     || f.properties?.ISO3
+                     || f.properties?.iso_a3
+                     || f.properties?.iso_a3_eh
+                     || f.id;
+
+    function valueAt(iso3, idxYear){
+      const rec = REC.find(d => d.iso3 === iso3);
+      if (!rec) return null;
+      const v = rec.shares[idxYear];
+      return (v==null || Number.isNaN(v)) ? null : v;
+    }
+
+    // Tooltip
+    const tip = document.createElement('div');
+    Object.assign(tip.style, {
+      position:'fixed', zIndex:9999, pointerEvents:'none',
+      background:'rgba(17,24,39,.95)', color:'#fff', padding:'8px 10px',
+      borderRadius:'8px', font:'12px/1.35 sans-serif',
+      boxShadow:'0 8px 24px rgba(0,0,0,.35)', opacity:0, transition:'opacity .12s'
+    });
+    document.body.appendChild(tip);
+    function showTip(ev, name, v){
+      let txt = `<div style="font-weight:700;margin-bottom:4px">${name}</div>`;
+      if (v==null) txt += `<div>Sin dato</div>`;
+      else txt += `<div>Renovable: <strong>${fmtPct(v)}</strong></div>`;
+      tip.innerHTML = txt;
+      tip.style.opacity = 1;
+      tip.style.left = (ev.clientX+12)+'px';
+      tip.style.top  = (ev.clientY+12)+'px';
+    }
+    function hideTip(){ tip.style.opacity = 0; }
+
+    // Países
+    const countries = g.selectAll("path.country")
+      .data(world.features)
+      .join("path")
+      .attr("class","country")
+      .attr("d", path)
+      .attr("fill", f => {
+        const iso = isoKey(f);
+        const v   = valueAt(iso, idx);
+        return (v==null) ? "#374151" : col(v);
+      })
+      .attr("stroke","#111").attr("stroke-width",0.25)
+      .on("mousemove", (ev,f) => {
+        const iso  = isoKey(f);
+        const rec  = REC.find(d => d.iso3===iso);
+        const name = rec?.name || (f.properties?.NAME || "");
+        const v    = valueAt(iso, idx);
+        showTip(ev, name, v);
+      })
+      .on("mouseleave", hideTip)
+      .on("click", (ev,f) => {
+        const iso = isoKey(f);
+        selectCountry(iso);
+      });
+
+    // Leyenda (0%-100%)
+    const L = 160, Hbar = 10;
+    const gradId = "grad-"+Math.random().toString(36).slice(2);
+    const defs = svg.append("defs");
+    const lg = defs.append("linearGradient").attr("id", gradId);
+    d3.range(0, 11).forEach(i => {
+      const t = i/10;
+      lg.append("stop").attr("offset", `${t*100}%`).attr("stop-color", col(t));
+    });
+    svg.append("rect")
+      .attr("x", W- L - 16).attr("y", 10).attr("width", L).attr("height", Hbar)
+      .attr("fill", `url(#${gradId})`).attr("stroke","#222");
+    svg.append("text").attr("x", W- L - 16).attr("y", 8).attr("fill","#e5e7eb")
+      .style("font","12px sans-serif").text("0%");
+    svg.append("text").attr("x", W- 16).attr("y", 8).attr("text-anchor","end").attr("fill","#e5e7eb")
+      .style("font","12px sans-serif").text("100%");
+
+    // ===== Línea temporal =====
+    const svgLine = root.append("svg").attr("width", W).attr("height", lineH);
+    const gl = svgLine.append("g").attr("transform", `translate(52,14)`);
+    const lw = W - 52 - 26, lh = lineH - 20;
+
+    const x = d3.scalePoint().domain(d3.range(YEARS.length)).range([0,lw]);
+    const y = d3.scaleLinear().domain([0,1]).range([lh,0]).nice();
+
+    gl.append("g").attr("transform",`translate(0,${lh})`).call(
+      d3.axisBottom(x).tickValues(d3.range(YEARS.length).filter(i => i%Math.ceil(YEARS.length/10)===0)).tickFormat(i => YEARS[i])
+    ).selectAll("text").style("font","10px sans-serif").attr("transform","rotate(-35)").style("text-anchor","end");
+    gl.append("g").call(d3.axisLeft(y).ticks(6, ".0%")).selectAll("text").style("font","10px sans-serif");
+
+    const line = d3.line().defined(v => v!=null).x((d,i)=>x(i)).y(d=>y(d));
+    const linePath  = gl.append("path").attr("fill","none").attr("stroke","#60a5fa").attr("stroke-width",2);
+    const lineTitle = svgLine.append("text").attr("x", 52).attr("y", 12).style("font","600 12px sans-serif").attr("fill","#e5e7eb").text("Selecciona un país…");
+
+    function selectCountry(iso3){
+      const rec = REC.find(d => d.iso3===iso3);
+      if (!rec) return;
+      lineTitle.text((rec.name || iso3) + " — participación renovable");
+      linePath.datum(rec.shares).transition().duration(250).attr("d", line);
+      countries.attr("stroke-width", d => ((d.properties?.ISO_A3||d.properties?.ADM0_A3||d.id)===iso3)? 1.2 : 0.25)
+               .attr("stroke", d => ((d.properties?.ISO_A3||d.properties?.ADM0_A3||d.id)===iso3)? "#fff" : "#111");
+    }
+
+    function recolor(){
+      countries.attr("fill", f => {
+        const iso = isoKey(f);
+        const v   = valueAt(iso, idx);
+        return (v==null) ? "#374151" : col(v);
+      });
+      yearLbl.text(YEARS[idx]);
+    }
+
+    slider.on("input", ev => { idx = +ev.target.value; recolor(); });
+
+    // Estado inicial
+    status.textContent = `D3 OK · ${world.features?.length ?? 0} países · Año: ${YEARS[idx]}`;
+    recolor();
+  } catch (e) {
+    const msg = (e && e.stack) ? e.stack : (''+e);
+    document.getElementById("__UID__-status").textContent = 'Error: ' + msg;
+  }
+})();
+"""
+
+    # --- 9) Reemplazos seguros ---
+    js = (js
+          .replace("__UID__", uid)
+          .replace("__WIDTH__", str(width))
+          .replace("__HEIGHT__", str(height))
+          .replace("__WORLDOBJ__", json.dumps(world_obj))
+          .replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False))
+          )
+
+    display(Javascript(js))
+    return HTML(f"<small>WorldRenewable listo (#{uid})</small>")

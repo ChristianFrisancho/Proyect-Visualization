@@ -5,7 +5,8 @@ from .graphs import (
     ScatterBrush,      # scatter con tooltip/leyenda
     BeeSwarmCapacity,
     ParallelEnergy,
-    RadialStackedBar
+    RadialStackedBar,
+    WorldRenewable
 )
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "ScatterBrush",
     "BeeSwarmCapacity",
     "ParallelEnergy",
-    "RadialStackedBar"
+    "RadialStackedBar",
+    "WorldRenewable",
 ]
