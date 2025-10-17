@@ -606,3 +606,348 @@ def RadarChart(df, features=None, name_col='name', width=700, height=700, color_
     return HTML(f"<small>RadarChart listo (#{uid})</small>")
 
 
+def RadialStackedBar(
+    df,
+    group_col,
+    category_col,
+    value_col,
+    *,
+    agg='sum',
+    width=928,
+    height=928,
+    inner_radius=180,
+    pad_angle=0.015,
+    color_scheme='schemeSpectral',
+    sort_on_click=True,
+    title=None
+):
+    df = df.copy()
+
+    if not pd.api.types.is_numeric_dtype(df[value_col]):
+        df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
+    
+    df = df.dropna(subset=[group_col, category_col, value_col])
+
+    if agg not in ('sum', 'mean'):
+        agg = 'sum'
+    
+    grouped = df.groupby([group_col, category_col])[value_col].agg(agg).reset_index()
+    pivot_df = grouped.pivot(index=group_col, columns=category_col, values=value_col).fillna(0)
+    pivot_df = pivot_df.sort_index()
+
+    categories = [str(c) for c in pivot_df.columns]
+    data = []
+    for g in pivot_df.index:
+        obj = {"group": str(g)}
+        for c in pivot_df.columns:
+            obj[str(c)] = float(pivot_df.loc[g, c])
+        data.append(obj)
+
+    payload = json.dumps(data, ensure_ascii=False)
+    categories_json = json.dumps(categories)
+    title_json = json.dumps(title if title else value_col)
+    uid = f"radialstack-{uuid.uuid4().hex[:8]}"
+
+    display(HTML(f"""
+<div id="{uid}-container" style="display: flex; justify-content: center; align-items: center; margin-top: 20px;">
+  <div id="{uid}" style="position: relative;"></div>
+</div>
+<div id="{uid}-status" style="text-align: center; font-size: 12px; color: #666; margin: 12px 0;">
+  Cargando visualización...
+</div>
+"""))
+
+    js = f"""
+(async () => {{
+  const status = document.getElementById('{uid}-status');
+  try {{
+    const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    const d3 = mod.default ?? mod;
+
+    const mount = document.getElementById('{uid}');
+    mount.innerHTML = '';
+
+    let data = {payload};
+    const keys = {categories_json};
+    const title = {title_json};
+    
+    const W = {width};
+    const H = {height};
+    const innerRadius = {inner_radius};
+    const outerRadius = Math.min(W, H) / 2 - 60;
+    const padAngle = {pad_angle};
+
+    let sorted = false;
+
+    const svg = d3.select(mount)
+      .append('svg')
+      .attr('width', W)
+      .attr('height', H)
+      .attr('viewBox', [-W / 2, -H / 2, W, H])
+      .style('width', '100%')
+      .style('height', 'auto')
+      .style('font', '10px sans-serif');
+
+    const x = d3.scaleBand()
+      .domain(data.map(d => d.group))
+      .range([0, 2 * Math.PI])
+      .align(0);
+
+    const yMax = d3.max(data, d => d3.sum(keys, k => +d[k]));
+    const y = d3.scaleRadial()
+      .domain([0, yMax])
+      .range([innerRadius, outerRadius]);
+
+    let colorRange;
+    const numColors = keys.length;
+    
+    if ('{color_scheme}' === 'schemeSpectral') {{
+      colorRange = numColors <= 3 ? d3.schemeSpectral[3] : 
+                   numColors <= 11 ? d3.schemeSpectral[numColors] : 
+                   d3.schemeSpectral[11];
+    }} else if ('{color_scheme}'.startsWith('scheme')) {{
+      try {{
+        colorRange = d3['{color_scheme}'][Math.max(Math.min(numColors, 12), 3)] || d3.schemeCategory10;
+      }} catch (e) {{
+        colorRange = d3.schemeCategory10;
+      }}
+    }} else {{
+      colorRange = d3.schemeCategory10;
+    }}
+
+    const color = d3.scaleOrdinal()
+      .domain(keys)
+      .range(colorRange);
+
+    const formatValue = d3.format(",.1f");
+
+    const arc = d3.arc()
+      .innerRadius(d => y(d[0]))
+      .outerRadius(d => y(d[1]))
+      .startAngle(d => x(d.data.group))
+      .endAngle(d => x(d.data.group) + x.bandwidth())
+      .padAngle(padAngle)
+      .padRadius(innerRadius);
+
+    const g = svg.append('g');
+
+    function render(animate = false) {{
+      const series = d3.stack().keys(keys)(data);
+      
+      x.domain(data.map(d => d.group));
+
+      const barGroups = g.selectAll('.series-group')
+        .data(series, d => d.key);
+      
+      barGroups.exit().remove();
+      
+      const barGroupsEnter = barGroups.enter()
+        .append('g')
+        .attr('class', 'series-group')
+        .attr('fill', d => color(d.key));
+      
+      const allBarGroups = barGroupsEnter.merge(barGroups);
+      
+      allBarGroups.each(function(seriesData) {{
+        const paths = d3.select(this).selectAll('path')
+          .data(seriesData.map(d => ({{...d, key: seriesData.key}})));
+        
+        paths.exit().remove();
+        
+        paths.transition()
+          .duration(animate ? 750 : 0)
+          .attr('d', arc);
+        
+        paths.enter()
+          .append('path')
+          .attr('d', animate ? d => {{
+            const arcStart = d3.arc()
+              .innerRadius(innerRadius)
+              .outerRadius(innerRadius)
+              .startAngle(d => x(d.data.group))
+              .endAngle(d => x(d.data.group) + x.bandwidth())
+              .padAngle(padAngle)
+              .padRadius(innerRadius);
+            return arcStart(d);
+          }} : arc)
+          .attr('stroke', '#fff')
+          .attr('stroke-width', 1)
+          .style('opacity', 0.85)
+          .transition()
+          .duration(animate ? 750 : 0)
+          .attr('d', arc)
+          .on('end', function() {{
+            d3.select(this)
+              .on('mouseover', function(event, d) {{
+                d3.select(this)
+                  .style('opacity', 1)
+                  .style('stroke', '#333')
+                  .style('stroke-width', 2);
+                
+                const total = d3.sum(keys, k => d.data[k]);
+                const value = d.data[d.key];
+                const percentage = (value / total * 100).toFixed(1);
+                
+                status.textContent = `${{d.data.group}} – ${{d.key}}: ${{formatValue(value)}} (${{percentage}}%)`;
+              }})
+              .on('mouseout', function() {{
+                d3.select(this)
+                  .style('opacity', 0.85)
+                  .style('stroke', '#fff')
+                  .style('stroke-width', 1);
+                
+                status.textContent = sorted ? 
+                  'Visualización ordenada por tamaño. Clic para restaurar orden original.' : 
+                  'Clic en el gráfico para ordenar por tamaño total.';
+              }})
+              .append('title')
+              .text(d => `${{d.data.group}} - ${{d.key}}: ${{formatValue(d.data[d.key])}}`);
+          }});
+      }});
+    }}
+
+    const yTicks = y.ticks(5).slice(1);
+    
+    g.append('g')
+      .selectAll('circle')
+      .data(yTicks)
+      .join('circle')
+      .attr('r', y)
+      .style('fill', 'none')
+      .style('stroke', '#ddd')
+      .style('stroke-dasharray', '2,4')
+      .style('stroke-width', 0.5);
+
+    g.append('g')
+      .attr('text-anchor', 'middle')
+      .selectAll('text')
+      .data(yTicks)
+      .join('text')
+      .attr('y', d => -y(d))
+      .attr('dy', '-0.35em')
+      .attr('fill', '#666')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 3)
+      .attr('stroke-linejoin', 'round')
+      .attr('paint-order', 'stroke')
+      .style('font-size', '9px')
+      .text(d => d3.format('~s')(d))
+      .clone(true)
+      .attr('stroke', 'none')
+      .attr('fill', '#666');
+
+    const labels = g.append('g')
+      .selectAll('g')
+      .data(data)
+      .join('g')
+      .attr('text-anchor', 'middle')
+      .attr('transform', d => {{
+        const angle = ((x(d.group) + x.bandwidth() / 2) * 180 / Math.PI) - 90;
+        return `rotate(${{angle}})translate(${{outerRadius + 10}},0)`;
+      }});
+    
+    labels.append('line')
+      .attr('x1', 0)
+      .attr('x2', 0)
+      .attr('y1', 0)
+      .attr('y2', 7)
+      .attr('stroke', '#999')
+      .attr('stroke-width', 1);
+    
+    labels.append('text')
+      .attr('transform', d => {{
+        const angle = (x(d.group) + x.bandwidth() / 2);
+        return ((angle + Math.PI / 2) % (2 * Math.PI) < Math.PI) ? 
+          'rotate(90)translate(10,-2)' : 
+          'rotate(-90)translate(-10,-2)';
+      }})
+      .style('font-size', '9px')
+      .style('font-weight', data.length > 30 ? 'normal' : 'bold')
+      .style('fill', '#333')
+      .text(d => d.group);
+
+    const legendG = svg.append('g')
+      .attr('class', 'legend')
+      .attr('text-anchor', 'start');
+    
+    if (keys.length > 1) {{
+      legendG.append('rect')
+        .attr('x', -innerRadius * 0.9)
+        .attr('y', -innerRadius * 0.7)
+        .attr('width', innerRadius * 1.8)
+        .attr('height', Math.min(keys.length * 22 + 40, innerRadius * 1.4))
+        .attr('rx', 10)
+        .attr('ry', 10)
+        .attr('fill', '#fff')
+        .attr('opacity', 0.7);
+    }}
+    
+    legendG.append('text')
+      .attr('x', 0)
+      .attr('y', -innerRadius * 0.5)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '14px')
+      .attr('font-weight', 'bold')
+      .text(title);
+
+    const legendItems = legendG.selectAll('.legend-item')
+      .data(keys)
+      .join('g')
+      .attr('class', 'legend-item')
+      .attr('transform', (d, i) => {{
+        const itemsPerColumn = Math.min(Math.ceil(keys.length / 2), 6);
+        const column = Math.floor(i / itemsPerColumn);
+        const row = i % itemsPerColumn;
+        const x = (column === 0 ? -innerRadius * 0.6 : 20);
+        const y = -innerRadius * 0.3 + row * 22 + (column === 1 ? 0 : 0);
+        return `translate(${{x}},${{y}})`;
+      }});
+
+    legendItems.append('rect')
+      .attr('width', 16)
+      .attr('height', 16)
+      .attr('fill', d => color(d))
+      .attr('stroke', '#999')
+      .attr('stroke-width', 0.5)
+      .attr('rx', 2);
+
+    legendItems.append('text')
+      .attr('x', 22)
+      .attr('y', 9)
+      .attr('dy', '0.32em')
+      .attr('font-size', '11px')
+      .style('font-family', 'sans-serif')
+      .text(d => d);
+
+    render(true);
+
+    if ({sort_on_click}) {{
+      svg.style('cursor', 'pointer')
+        .on('click', () => {{
+          sorted = !sorted;
+          
+          if (sorted) {{
+            data.sort((a, b) => d3.descending(
+              d3.sum(keys, k => +a[k]),
+              d3.sum(keys, k => +b[k])
+            ));
+            status.textContent = 'Visualización ordenada por tamaño. Clic para restaurar orden original.';
+          }} else {{
+            data = {payload};
+            status.textContent = 'Clic en el gráfico para ordenar por tamaño total.';
+          }}
+          
+          render(true);
+        }});
+    }}
+
+    status.textContent = 'Clic en el gráfico para ordenar por tamaño total.';
+
+  }} catch (e) {{
+    console.error(e);
+    status.textContent = 'Error: ' + (e.message || e);
+  }}
+}})();
+"""
+    display(Javascript(js))
+    return HTML(f"<small>Radial Stacked Bar Chart listo (#{uid})</small>")
