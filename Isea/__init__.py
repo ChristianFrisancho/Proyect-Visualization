@@ -4,7 +4,8 @@ from .base_widget import IseaWidget
 from .graphs import (
     ScatterBrush,      # scatter con tooltip/leyenda
     BeeSwarmCapacity,
-    ParallelEnergy,  
+    ParallelEnergy,
+    RadialStackedBar
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "ScatterBrush",
     "BeeSwarmCapacity",
     "ParallelEnergy",
+    "RadialStackedBar"
 ]
