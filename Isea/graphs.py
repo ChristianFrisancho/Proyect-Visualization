@@ -1638,3 +1638,261 @@ def WorldRenewable(
 
     display(Javascript(js))
     return HTML(f"<small>WorldRenewable listo (#{uid})</small>")
+
+###milan
+def BubblePack(
+    df,
+    year=None,                   # p.ej. "F2023" (si None uso el último con datos)
+    country_col="Country",
+    iso3_col="ISO3",
+    tech_col="Technology_std",   # en {Solar, Wind, Hydro, Bio, Fossil}
+    color_by="DominantTech",     # "DominantTech" (default) o "Region" (si existe)
+    value_mode="total",          # "total" (=S+W+H+Bio+Fossil) o "renewables" (=S+W+H+Bio)
+    width=1200,
+    height=660,
+    min_label_r=18               # radio mínimo para mostrar etiqueta
+):
+    """
+    Bubble plot (d3.pack): cada círculo = país, tamaño = capacidad (MW) en 'year',
+    color = 'color_by' (DominantTech o Region). Tooltip con país y valor.
+    """
+    import json, uuid
+    import pandas as pd
+    from IPython.display import HTML, Javascript, display
+
+    # --- detectar columnas de año ---
+    year_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("F") and df[c].notna().any()]
+    if not year_cols:
+        raise ValueError("No se encontraron columnas Fxxxx con datos.")
+    if (year is None) or (year not in year_cols):
+        year = year_cols[-1]
+
+    # --- asegurar numéricos ---
+    df = df.copy()
+    for c in year_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # --- quedarnos con instaladas MW (por si el df completo viene con todo) ---
+    if "Indicator" in df.columns and "Unit" in df.columns:
+        df = df[(df["Indicator"] == "Electricity Installed Capacity") &
+                (df["Unit"] == "Megawatt (MW)")].copy()
+
+    # --- mantener sólo tecnologías esperadas ---
+    tech_keep = ["Solar", "Wind", "Hydro", "Bio", "Fossil"]
+    df = df[df[tech_col].isin(tech_keep)][[country_col, iso3_col, tech_col, year]].copy()
+
+    # --- pivot país × tecnología (en el año elegido) ---
+    piv = (df.pivot_table(index=[country_col, iso3_col], columns=tech_col, values=year, aggfunc="sum")
+             .reindex(columns=tech_keep)
+             .fillna(0.0)
+             .reset_index())
+
+    # --- valor del círculo ---
+    if value_mode == "renewables":
+        piv["__value__"] = piv[["Solar","Wind","Hydro","Bio"]].sum(axis=1, numeric_only=True)
+    else:
+        piv["__value__"] = piv[["Solar","Wind","Hydro","Bio","Fossil"]].sum(axis=1, numeric_only=True)
+
+    # --- color por DominantTech si no hay Region o si así se pide ---
+    if color_by == "Region" and ("Region" in df.columns or "Region" in piv.columns):
+        pass  # usará piv["Region"] si existe (no la estamos construyendo aquí)
+    else:
+        color_by = "DominantTech"
+        piv["DominantTech"] = piv[["Solar","Wind","Hydro","Bio","Fossil"]].idxmax(axis=1)
+
+    # si existe columna Region en tu df y quieres usarla:
+    if color_by == "Region" and "Region" not in piv.columns:
+        # intenta heredar desde df si vino esa columna
+        if "Region" in df.columns:
+            piv = piv.merge(
+                df[[country_col, iso3_col, "Region"]].drop_duplicates(),
+                on=[country_col, iso3_col],
+                how="left"
+            )
+        piv["Region"] = piv["Region"].fillna("Unknown")
+
+    # --- construir data para JS ---
+    data = []
+    for _, r in piv.iterrows():
+        if r["__value__"] is None or r["__value__"] <= 0:
+            continue
+        item = {
+            "country": str(r[country_col]),
+            "iso3": str(r[iso3_col]) if pd.notna(r[iso3_col]) else None,
+            "value": float(r["__value__"]),
+            "Solar": float(r.get("Solar", 0.0)),
+            "Wind": float(r.get("Wind", 0.0)),
+            "Hydro": float(r.get("Hydro", 0.0)),
+            "Bio": float(r.get("Bio", 0.0)),
+            "Fossil": float(r.get("Fossil", 0.0)),
+        }
+        if color_by == "Region":
+            item["group"] = str(r.get("Region", "Unknown"))
+        else:
+            item["group"] = str(r.get("DominantTech", "Unknown"))
+        data.append(item)
+
+    if not data:
+        raise ValueError("No hay datos > 0 para el año seleccionado.")
+
+    uid = f"bp-{uuid.uuid4().hex[:8]}"
+
+    # contenedor
+    display(HTML(f"""
+<div id="{uid}" class="vis"></div>
+<div id="{uid}-status" class="status">Renderizando…</div>
+<style>
+  .vis {{ width: 100%; min-height: 80px; }}
+  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
+</style>
+"""))
+
+    # --- JS con placeholders ---
+    js = r"""
+(async () => {
+  const status = document.getElementById("__UID__-status");
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    const d3  = mod.default ?? mod;
+
+    const DATA  = __DATA__;               // [{country, iso3, value, group, ...}]
+    const YEAR  = "__YEAR__";
+    const W = __WIDTH__, H = __HEIGHT__;
+    const minLabelR = __MINLABELR__;
+
+    const root = d3.select("#__UID__");
+    root.html("");
+
+    // Título y ayuda
+    root.append("div")
+      .style("font","600 16px/1.3 sans-serif")
+      .style("color","#e5e7eb")
+      .style("margin","0 0 6px 6px")
+      .text(`Capacidad instalada (${YEAR}) — Bubble pack`);
+
+    root.append("div")
+      .style("font","12px/1.35 sans-serif")
+      .style("color","#94a3b8")
+      .style("margin","0 0 8px 6px")
+      .text("Tamaño = MW; Color = grupo seleccionado; Hover para detalle; haz clic en la leyenda para ocultar/mostrar grupos.");
+
+    const svg = root.append("svg").attr("width", W).attr("height", H);
+    const m   = {top: 8, right: 220, bottom: 8, left: 8};
+    const iw  = W - m.left - m.right, ih = H - m.top - m.bottom;
+    const GG  = svg.append("g").attr("transform", `translate(${m.left},${m.top})`);
+
+    // Color por grupo
+    const groups = Array.from(new Set(DATA.map(d => d.group)));
+    const color = d3.scaleOrdinal()
+      .domain(groups)
+      .range(d3.schemeTableau10.concat(d3.schemeSet3).slice(0, groups.length));
+
+    // Layout pack
+    const packed = d3.pack().size([iw, ih]).padding(3);
+    const rootH  = d3.hierarchy({children: DATA}).sum(d => Math.max(0, +d.value || 0));
+    const leaves = packed(rootH).leaves();
+
+    // Tooltip
+    const tip = document.createElement('div');
+    Object.assign(tip.style, {
+      position:'fixed', zIndex:9999, pointerEvents:'none',
+      background:'rgba(17,24,39,.95)', color:'#fff', padding:'8px 10px',
+      borderRadius:'8px', font:'12px/1.35 sans-serif',
+      boxShadow:'0 8px 24px rgba(0,0,0,.35)', opacity:0, transition:'opacity .12s'
+    });
+    document.body.appendChild(tip);
+    const fmt = d3.format(",d");
+
+    function showTip(ev, d){
+      const html = `<div style="font-weight:700;margin-bottom:4px">${d.data.country}</div>`
+                 + `<div>${fmt(d.data.value)} MW</div>`;
+      tip.innerHTML = html;
+      tip.style.opacity = 1;
+      tip.style.left = (ev.clientX+12)+'px';
+      tip.style.top  = (ev.clientY+12)+'px';
+    }
+    function hideTip(){ tip.style.opacity = 0; }
+
+    // Nodos
+    const nodes = GG.selectAll("g.node")
+      .data(leaves, d => d.data.iso3 ?? d.data.country)
+      .join("g")
+      .attr("class","node")
+      .attr("transform", d => `translate(${d.x},${d.y})`);
+
+    const dots = nodes.append("circle")
+      .attr("class","dot")
+      .attr("r", d => d.r)
+      .attr("cx", 0).attr("cy", 0)
+      .attr("fill", d => color(d.data.group))
+      .attr("fill-opacity", 0.85)
+      .attr("stroke", "#111")
+      .attr("opacity", 0.85)
+      .on("mousemove", function(ev,d){ d3.select(this).attr("opacity", 1); showTip(ev,d); })
+      .on("mouseleave", function(){ d3.select(this).attr("opacity", 0.85); hideTip(); });
+
+    // Etiquetas si el radio lo permite
+    const labels = nodes.append("text")
+      .attr("text-anchor","middle")
+      .attr("pointer-events","none")
+      .style("fill","#111")
+      .style("font","11px sans-serif")
+      .style("font-weight","600")
+      .attr("opacity", d => d.r >= minLabelR ? 1 : 0);
+
+    labels.append("tspan")
+      .attr("x", 0).attr("y", -2)
+      .text(d => d.r >= minLabelR ? (d.data.country || "") : "");
+
+    labels.append("tspan")
+      .attr("x", 0).attr("dy", "1.2em")
+      .style("font-weight","400")
+      .text(d => d.r >= minLabelR ? fmt(d.data.value) : "");
+
+    // Leyenda a la derecha (click para filtrar)
+    const legend = svg.append("g").attr("transform", `translate(${W - m.right + 20}, 8)`);
+    legend.append("text").text("Grupo")
+      .style("font","600 12px sans-serif").attr("fill","#e5e7eb");
+
+    let hidden = new Set(); // grupos ocultos
+    const rows = legend.selectAll("g.row")
+      .data(groups)
+      .enter().append("g")
+      .attr("class","row")
+      .attr("transform", (d,i) => `translate(0,${18 + i*20})`)
+      .style("cursor","pointer")
+      .on("click", (ev,gp) => {
+        if (hidden.has(gp)) hidden.delete(gp); else hidden.add(gp);
+        updateVisibility();
+      });
+
+    rows.append("rect").attr("width", 14).attr("height", 14)
+      .attr("fill", d => color(d)).attr("stroke","#222");
+    rows.append("text").attr("x", 20).attr("y", 10)
+      .style("font","12px sans-serif").attr("fill","#e5e7eb")
+      .text(d => d);
+
+    function updateVisibility(){
+      dots.attr("display", d => hidden.has(d.data.group) ? "none" : null);
+      labels.attr("display", d => hidden.has(d.data.group) ? "none" : null);
+    }
+
+    status.textContent = `Listo · ${leaves.length} países · Año: ${YEAR}`;
+  } catch (e) {
+    const msg = (e && e.stack) ? e.stack : (''+e);
+    document.getElementById("__UID__-status").textContent = 'Error: ' + msg;
+  }
+})();
+"""
+
+    js = (js
+          .replace("__UID__", uid)
+          .replace("__WIDTH__", str(width))
+          .replace("__HEIGHT__", str(height))
+          .replace("__MINLABELR__", str(int(min_label_r)))
+          .replace("__YEAR__", str(year))
+          .replace("__DATA__", json.dumps(data, ensure_ascii=False))
+          )
+
+    display(Javascript(js))
+    return HTML(f"<small>BubblePack listo (#{uid})</small>")

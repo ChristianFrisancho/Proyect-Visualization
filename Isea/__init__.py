@@ -6,7 +6,8 @@ from .graphs import (
     BeeSwarmCapacity,
     ParallelEnergy,
     RadialStackedBar,
-    WorldRenewable
+    WorldRenewable,
+    BubblePack 
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "ParallelEnergy",
     "RadialStackedBar",
     "WorldRenewable",
+    "BubblePack"
 ]
