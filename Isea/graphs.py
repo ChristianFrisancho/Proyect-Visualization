@@ -1,608 +1,640 @@
+# graphs.py
 import json, uuid
 from IPython.display import HTML, Javascript, display
 import pandas as pd
+import numpy as np
 
-def ScatterBrush(df, x, y, color='origin', width=820, height=480):
-    # 1) asegurar tipos numéricos
+# ========== Helpers ==========
+def _to_numeric_cols(df, cols):
     df = df.copy()
-    for col in (x, y):
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df[[x, y, color]].dropna()
+    for c in cols:
+        if c in df.columns and not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
 
-    data = df.to_dict(orient="records")
-    payload = json.dumps(data, ensure_ascii=False)
-    uid = f"sc-{uuid.uuid4().hex[:8]}"
-
-    # 2) contenedor
-    display(HTML(f"""
+def _display_container(uid, min_h):
+    html = f"""
 <div id="{uid}" class="vis"></div>
 <div id="{uid}-status" class="status">Cargando…</div>
 <style>
-  .vis {{ width: 100%; min-height: 80px; }}
+  .vis {{ width: 100%; min-height: {min_h}px; }}
   .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
   .axis path, .axis line {{ shape-rendering: crispEdges; }}
 </style>
+"""
+    display(HTML(html))
+
+def ScatterBrush(
+    df,
+    x,
+    y,
+    color=None,          # columna categórica para colorear + leyenda
+    size=None,           # (opcional) columna numérica para tamaño
+    label=None,          # (opcional) columna mostrada en tooltip
+    width=900,
+    height=560,
+    zero_filter=True,    # filtra puntos (0,0)
+    log_x=False,
+    log_y=False,
+):
+    """
+    Scatter D3 sin brush con:
+      - tooltip (label + x/y + size)
+      - leyenda de color
+      - títulos de ejes y grilla
+      - (opcional) tamaño ~ size y escalas log
+    """
+    import json, uuid
+    import pandas as pd
+    from IPython.display import HTML, Javascript, display
+
+    # Validación
+    cols = [x, y] + ([color] if color else []) + ([size] if size else []) + ([label] if label else [])
+    miss = [c for c in cols if c and c not in df.columns]
+    if miss:
+        raise KeyError(f"Faltan columnas {miss}. Disponibles: {list(df.columns)}")
+
+    # Limpieza mínima
+    df = df.copy()
+    for c in [x, y, size]:
+        if c and not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=[x, y])
+    if zero_filter:
+        df = df.loc[~((df[x]==0) & (df[y]==0))]
+    if log_x:
+        df = df.loc[df[x] > 0]
+    if log_y:
+        df = df.loc[df[y] > 0]
+    if df.empty:
+        return display(HTML("<em>No hay datos para graficar (revisa filtros/columnas).</em>"))
+
+    payload  = json.dumps(df.to_dict(orient="records"), ensure_ascii=False)
+    XCOL     = json.dumps(x)
+    YCOL     = json.dumps(y)
+    CCOL     = json.dumps(color or "")
+    SCOL     = json.dumps(size or "")
+    LCOL     = json.dumps(label or "")
+
+    uid = f"sc-{uuid.uuid4().hex[:8]}"
+
+    display(HTML(f"""
+<div id="{uid}" class="vis"></div>
+<div id="{uid}-status" class="status">Renderizando…</div>
+<style>
+  .vis {{ width: 100%; min-height: 80px; }}
+  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
+</style>
 """))
 
-    # 3) JS robusto (D3 ESM + fallback de colores + errores visibles)
     js = f"""
 (async () => {{
   const status = document.getElementById('{uid}-status');
   try {{
-    // D3 como módulo ESM
     const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
     const d3  = mod.default ?? mod;
 
     const mount = document.getElementById('{uid}');
-    mount.innerHTML = ''; // limpiar por re-ejecución
+    mount.innerHTML = '';
 
-    const data  = {payload};
-    const W={width}, H={height}, m={{top:24,right:16,bottom:36,left:44}};
+    const data     = {payload};
+    const XCOL     = {XCOL};
+    const YCOL     = {YCOL};
+    const COLORCOL = {CCOL};
+    const SIZECOL  = {SCOL};
+    const LABELCOL = {LCOL};
+
+    const W = {width}, H = {height};
+    const hasLegend = !!COLORCOL;
+    const m = hasLegend ? {{top: 28, right: 140, bottom: 56, left: 64}} : {{top: 28, right: 24, bottom: 56, left: 64}};
     const iW = W - m.left - m.right, iH = H - m.top - m.bottom;
 
-    const svg = d3.select(mount).append('svg')
-      .attr('width', W).attr('height', H);
-    const g = svg.append('g').attr('transform', `translate(${{m.left}},${{m.top}})`);
+    const svg = d3.select(mount).append('svg').attr('width', W).attr('height', H);
+    const g   = svg.append('g').attr('transform', `translate(${{m.left}},${{m.top}})`);
 
-    const x = d3.scaleLinear()
-      .domain(d3.extent(data, d => +d['{x}'])).nice()
+    const useLogX = {str(log_x).lower()};
+    const useLogY = {str(log_y).lower()};
+
+    const xVals = data.map(d => +d[XCOL]).filter(v => Number.isFinite(v) && (!useLogX || v > 0));
+    const yVals = data.map(d => +d[YCOL]).filter(v => Number.isFinite(v) && (!useLogY || v > 0));
+    const x = (useLogX ? d3.scaleLog() : d3.scaleLinear())
+      .domain(useLogX ? [Math.max(1e-6, d3.min(xVals)), d3.max(xVals)] : d3.extent(xVals)).nice()
       .range([0, iW]);
-    const y = d3.scaleLinear()
-      .domain(d3.extent(data, d => +d['{y}'])).nice()
+    const y = (useLogY ? d3.scaleLog() : d3.scaleLinear())
+      .domain(useLogY ? [Math.max(1e-6, d3.min(yVals)), d3.max(yVals)] : d3.extent(yVals)).nice()
       .range([iH, 0]);
 
-    g.append('g').attr('transform', `translate(0,${{iH}})`).call(d3.axisBottom(x));
-    g.append('g').call(d3.axisLeft(y));
+    const cats = COLORCOL ? [...new Set(data.map(d => d[COLORCOL]))].filter(d => d!==undefined && d!==null) : null;
+    const color = cats ? d3.scaleOrdinal(cats, d3.schemeTableau10) : null;
 
-    const cats = [...new Set(data.map(d => d['{color}']))];
-    const color = d3.scaleOrdinal(cats, d3.schemeCategory10);
+    const size = SIZECOL
+      ? d3.scaleSqrt().domain(d3.extent(data, d => +d[SIZECOL] || 0)).range([3, 12])
+      : null;
 
-    const dots = g.selectAll('circle').data(data).join('circle')
-      .attr('r', 3.5)
-      .attr('cx', d => x(+d['{x}']))
-      .attr('cy', d => y(+d['{y}']))
-      .attr('fill', d => color(d['{color}']))
-      .attr('opacity', 0.95);
+    // Grilla
+    g.append('g')
+      .attr('transform', `translate(0,${{iH}})`)
+      .call(d3.axisBottom(x).ticks(8, useLogX ? "~g" : undefined).tickSize(-iH).tickFormat(() => ""))
+      .selectAll('line').attr('stroke', '#e5e7eb');
+    g.append('g')
+      .call(d3.axisLeft(y).ticks(8, useLogY ? "~g" : undefined).tickSize(-iW).tickFormat(() => ""))
+      .selectAll('line').attr('stroke', '#e5e7eb');
 
-    const brush = d3.brush()
-      .extent([[0,0],[iW,iH]])
-      .on('brush end', (ev) => {{
-        const sel = ev.selection;
-        if (!sel) {{
-          dots.attr('opacity', 0.95).attr('stroke', null);
-          status.textContent = 'Tip: arrastra para seleccionar. Doble clic limpia.';
-          window._lastSelection = null;
-          return;
-        }}
-        const [[x0,y0],[x1,y1]] = sel;
-        let count = 0;
-        dots
-          .attr('opacity', d => {{
-            const hit = (x0 <= x(+d['{x}']) && x(+d['{x}']) <= x1 &&
-                         y0 <= y(+d['{y}']) && y(+d['{y}']) <= y1);
-            if (hit) count++;
-            return hit ? 1 : 0.2;
-          }})
-          .attr('stroke', d => {{
-            const hit = (x0 <= x(+d['{x}']) && x(+d['{x}']) <= x1 &&
-                         y0 <= y(+d['{y}']) && y(+d['{y}']) <= y1);
-            return hit ? '#111' : null;
-          }})
-          .attr('stroke-width', d => {{
-            const hit = (x0 <= x(+d['{x}']) && x(+d['{x}']) <= x1 &&
-                         y0 <= y(+d['{y}']) && y(+d['{y}']) <= y1);
-            return hit ? 1.1 : null;
-          }});
-        status.textContent = `Seleccionados: ${{count}} punto(s).`;
-      }});
+    // Ejes
+    g.append('g').attr('transform', `translate(0,${{iH}})`).call(d3.axisBottom(x).ticks(8, useLogX ? "~g" : undefined));
+    g.append('g').call(d3.axisLeft(y).ticks(8, useLogY ? "~g" : undefined));
 
-    const gBrush = g.append('g').attr('class','brush').call(brush);
-    svg.on('dblclick', () => gBrush.call(brush.move, null));
+    // Títulos
+    g.append('text').attr('x', iW/2).attr('y', iH + 40).attr('text-anchor','middle')
+      .style('font','12px sans-serif').text(XCOL);
+    g.append('text').attr('transform','rotate(-90)').attr('x', -iH/2).attr('y', -46).attr('text-anchor','middle')
+      .style('font','12px sans-serif').text(YCOL);
 
-    status.textContent = 'Tip: arrastra para seleccionar. Doble clic limpia.';
+    // Tooltip
+    const tip = document.createElement('div');
+    Object.assign(tip.style, {{
+      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
+      background: 'rgba(17,24,39,.92)', color: '#fff',
+      padding: '8px 10px', borderRadius: '8px', font: '12px sans-serif',
+      boxShadow: '0 4px 16px rgba(0,0,0,.25)', opacity: 0, transition: 'opacity .12s ease-out'
+    }});
+    document.body.appendChild(tip);
+    const fmt = d3.format(",.0f");
+
+    function showTip(event, d) {{
+      const lbl = LABELCOL ? (d[LABELCOL] ?? "") : "";
+      const s   = SIZECOL  ? "<div><strong>"+SIZECOL+"</strong>: "+fmt(+d[SIZECOL]||0)+"</div>" : "";
+      tip.innerHTML =
+        (lbl ? "<div style='font-weight:600;margin-bottom:4px'>"+lbl+"</div>" : "") +
+        "<div><strong>"+XCOL+"</strong>: "+fmt(+d[XCOL]||0)+"</div>" +
+        "<div><strong>"+YCOL+"</strong>: "+fmt(+d[YCOL]||0)+"</div>" + s;
+      tip.style.opacity = 1;
+      const x = event.clientX, y = event.clientY;
+      tip.style.left = (x + 14) + "px";
+      tip.style.top  = (y + 14) + "px";
+    }}
+    function hideTip() {{ tip.style.opacity = 0; }}
+
+    // Puntos
+    g.selectAll('circle')
+      .data(data)
+      .join('circle')
+      .attr('cx', d => x(+d[XCOL]))
+      .attr('cy', d => y(+d[YCOL]))
+      .attr('r', d => size ? size(+d[SIZECOL]||0) : 4)
+      .attr('fill', d => color ? color(d[COLORCOL]) : '#4f46e5')
+      .attr('opacity', 0.95)
+      .on('mousemove', showTip)
+      .on('mouseleave', hideTip)
+      .on('mouseover', function() {{ d3.select(this).attr('stroke','#111').attr('stroke-width',1.2); }})
+      .on('mouseout',  function() {{ d3.select(this).attr('stroke',null).attr('stroke-width',null); }});
+
+    // Leyenda
+    if (cats && cats.length) {{
+      const lg = svg.append('g').attr('transform', `translate(${{W - m.right + 16}},${{m.top}})`);
+      const row = lg.selectAll('g').data(cats).join('g')
+        .attr('transform', (d,i) => `translate(0,${{i*20}})`);
+      row.append('rect').attr('width',12).attr('height',12).attr('rx',2).attr('fill', d => color(d));
+      row.append('text').attr('x',16).attr('y',6).attr('dy','.35em').style('font','12px sans-serif').text(d => String(d));
+    }}
+
+    status.textContent = 'Listo. Pasa el mouse sobre los puntos para ver detalles.';
   }} catch (e) {{
-    const msg = (e && e.stack) ? e.stack : (''+e);
-    document.getElementById('{uid}-status').textContent = 'Error al renderizar: ' + msg;
+    status.textContent = 'Error: ' + (e && e.stack ? e.stack : e);
   }}
 }})();
 """
     display(Javascript(js))
-    return HTML(f"<small>ScatterBrush listo (#{uid})</small>")
+    return HTML(f"<small>Scatter listo (#{uid})</small>")
 
-def Sunburst(df, path_columns, value_column, width=800, height=800, color_scheme='schemeCategory10'):
+# ========== 2) Sunburst ==========
+def Sunburst(df, path_columns, value_column, width=720, height=720):
     """
-    Diagrama Sunburst para visualizar datos jerárquicos en formato circular.
-    
-    Args:
-        df: DataFrame con los datos
-        path_columns: Lista de columnas que definen la jerarquía (de más general a más específico)
-        value_column: Columna numérica que determina el tamaño de cada segmento
-        width: Ancho del gráfico
-        height: Alto del gráfico
-        color_scheme: Esquema de colores D3
+    Sunburst jerárquico sumando valores por camino.
     """
     df = df.copy()
-    
-    # Convertir value_column a numérico
     if not pd.api.types.is_numeric_dtype(df[value_column]):
         df[value_column] = pd.to_numeric(df[value_column], errors="coerce")
-    
-    df = df.dropna(subset=[value_column])
-    
-    # Construir jerarquía
-    hierarchy = {"name": "root", "children": []}
-    
+    df = df.dropna(subset=path_columns + [value_column])
+
+    # Construir árbol acumulando sumas
+    root = {{ "name": "root", "children": [] }}
+    def add_path(node, keys, val):
+        if not keys:
+            node["value"] = node.get("value", 0) + float(val)
+            return
+        name = str(keys[0])
+        for child in node.get("children", []):
+            if child["name"] == name:
+                add_path(child, keys[1:], val)
+                break
+        else:
+            new_child = {{ "name": name, "children": [] }}
+            node.setdefault("children", []).append(new_child)
+            add_path(new_child, keys[1:], val)
+
     for _, row in df.iterrows():
-        current_level = hierarchy
-        for col in path_columns:
-            value = str(row[col])
-            # Buscar si ya existe este nodo
-            found = False
-            for child in current_level.get("children", []):
-                if child["name"] == value:
-                    current_level = child
-                    found = True
-                    break
-            
-            if not found:
-                new_node = {"name": value, "children": []}
-                if "children" not in current_level:
-                    current_level["children"] = []
-                current_level["children"].append(new_node)
-                current_level = new_node
-        
-        # Agregar el valor en el nodo hoja
-        current_level["value"] = row[value_column]
-    
-    payload = json.dumps(hierarchy, ensure_ascii=False)
-    uid = f"sunburst-{uuid.uuid4().hex[:8]}"
-    
-    display(HTML(f"""
-<div id="{uid}" class="vis"></div>
-<div id="{uid}-status" class="status">Cargando Sunburst…</div>
-<style>
-  .vis {{ width: 100%; min-height: {height}px; }}
-  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
-</style>
-"""))
-    
+        keys = [str(row[c]) for c in path_columns]
+        add_path(root, keys, row[value_column])
+
+    payload = json.dumps(root, ensure_ascii=False)
+    uid = f"sun-{uuid.uuid4().hex[:8]}"
+
+    _display_container(uid, height)
+
     js = f"""
 (async () => {{
   const status = document.getElementById('{uid}-status');
   try {{
     const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
-    const d3 = mod.default ?? mod;
-    
+    const d3  = mod.default ?? mod;
+
     const mount = document.getElementById('{uid}');
     mount.innerHTML = '';
-    
+
     const data = {payload};
-    const W = {width}, H = {height};
-    const radius = Math.min(W, H) / 2;
-    
-    const svg = d3.select(mount)
-      .append('svg')
-      .attr('width', W)
-      .attr('height', H)
-      .append('g')
-      .attr('transform', `translate(${{W/2}}, ${{H/2}})`);
-    
-    const color = d3.scaleOrdinal(d3.{color_scheme} || d3.schemeCategory10);
-    
-    const root = d3.hierarchy(data)
-      .sum(d => d.value || 0)
-      .sort((a, b) => b.value - a.value);
-    
-    const partition = d3.partition()
-      .size([2 * Math.PI, radius]);
-    
-    partition(root);
-    
+    const W={width}, H={height};
+    const R = Math.min(W, H)/2 - 4;
+
+    const svg = d3.select(mount).append('svg').attr('width', W).attr('height', H);
+    const g   = svg.append('g').attr('transform', `translate(${{W/2}},${{H/2}})`);
+
+    const root = d3.partition()
+      .size([2*Math.PI, 1])(
+        d3.hierarchy(data).sum(d => d.value || 0).sort((a,b)=>b.value - a.value)
+      );
+
     const arc = d3.arc()
-      .startAngle(d => d.x0)
-      .endAngle(d => d.x1)
-      .innerRadius(d => d.y0)
-      .outerRadius(d => d.y1);
-    
-    const segments = svg.selectAll('path')
-      .data(root.descendants().filter(d => d.depth > 0))
-      .enter()
-      .append('path')
+      .startAngle(d=>d.x0).endAngle(d=>d.x1)
+      .innerRadius(d=>d.y0 * R).outerRadius(d=>Math.max(d.y0*R, d.y1*R - 2));
+
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+    g.selectAll('path')
+      .data(root.descendants().filter(d=>d.depth))
+      .join('path')
       .attr('d', arc)
-      .style('fill', d => color(d.data.name))
-      .style('stroke', '#fff')
-      .style('stroke-width', '2px')
-      .style('opacity', 0.8)
-      .on('mouseover', function(event, d) {{
-        d3.select(this)
-          .style('opacity', 1)
-          .style('stroke-width', '3px');
-        
-        const percent = ((d.value / root.value) * 100).toFixed(1);
-        status.textContent = `${{d.data.name}}: ${{d.value.toFixed(2)}} (${{percent}}%)`;
+      .attr('fill', d => color(d.ancestors().map(a=>a.data.name).slice(-2,-1)[0]))
+      .attr('stroke', '#fff')
+      .style('cursor','pointer')
+      .style('opacity', .9)
+      .on('mouseover', function(event, d){{
+        d3.select(this).style('opacity', 1);
+        const pct = ((d.value / root.value) * 100).toFixed(1);
+        status.textContent = d.ancestors().map(a=>a.data.name).reverse().slice(1).join(' / ') + 
+                             `: ${{d.value.toLocaleString()}} ( ${{pct}}% )`;
       }})
-      .on('mouseout', function() {{
-        d3.select(this)
-          .style('opacity', 0.8)
-          .style('stroke-width', '2px');
+      .on('mouseout', function(){{
+        d3.select(this).style('opacity', .9);
         status.textContent = 'Hover sobre segmentos para ver detalles';
-      }});
-    
-    svg.selectAll('text')
-      .data(root.descendants().filter(d => d.depth > 0 && (d.x1 - d.x0) > 0.1))
-      .enter()
-      .append('text')
-      .attr('transform', d => {{
-        const angle = (d.x0 + d.x1) / 2;
-        const radius = (d.y0 + d.y1) / 2;
-        const x = Math.cos(angle - Math.PI / 2) * radius;
-        const y = Math.sin(angle - Math.PI / 2) * radius;
-        return `translate(${{x}},${{y}})`;
       }})
-      .attr('text-anchor', 'middle')
-      .attr('dy', '0.35em')
-      .style('font-size', '10px')
-      .style('fill', '#fff')
-      .style('font-weight', 'bold')
-      .style('pointer-events', 'none')
-      .text(d => d.data.name.length > 15 ? d.data.name.substring(0, 12) + '...' : d.data.name);
-    
+      .append('title')
+      .text(d => d.ancestors().map(a=>a.data.name).reverse().slice(1).join(' / ') + 
+                 `\\n${{d.value?.toLocaleString() ?? ''}}`);
+
     status.textContent = 'Hover sobre segmentos para ver detalles';
   }} catch (e) {{
-    const msg = (e && e.stack) ? e.stack : (''+e);
-    document.getElementById('{uid}-status').textContent = 'Error: ' + msg;
+    document.getElementById('{uid}-status').textContent = 'Error: ' + (e?.stack || e);
   }}
 }})();
 """
     display(Javascript(js))
     return HTML(f"<small>Sunburst listo (#{uid})</small>")
 
-
-def StreamGraph(df, x_column, y_column, category_column, width=900, height=500, color_scheme='schemeCategory10'):
+# ========== 3) StreamGraph ==========
+def StreamGraph(df, x_column, y_column, category_column, width=900, height=500):
     """
-    Stream Graph (gráfico de flujo) para visualizar datos temporales apilados.
+    StreamGraph apilado por categoría sobre eje X.
     """
     df = df.copy()
-    
     if not pd.api.types.is_numeric_dtype(df[y_column]):
         df[y_column] = pd.to_numeric(df[y_column], errors="coerce")
-    
     df = df.dropna(subset=[x_column, y_column, category_column])
-    
-    grouped = df.groupby([x_column, category_column])[y_column].sum().reset_index()
-    pivot_df = grouped.pivot(index=x_column, columns=category_column, values=y_column).fillna(0)
-    
+
+    grouped = df.groupby([x_column, category_column], dropna=False)[y_column].sum().reset_index()
+
+    xs = grouped[x_column].unique().tolist()
+    try:
+        xs_sorted = sorted(xs, key=lambda v: int(str(v)))
+    except Exception:
+        xs_sorted = sorted(xs, key=lambda v: str(v))
+
+    pivot_df = grouped.pivot(index=x_column, columns=category_column, values=y_column).fillna(0.0)
+    pivot_df = pivot_df.reindex(xs_sorted)
+
     data = []
-    for x_val in pivot_df.index:
-        row_data = {"x": str(x_val)}
+    for x_val, row in pivot_df.iterrows():
+        entry = {{ "x": str(x_val) }}
         for cat in pivot_df.columns:
-            row_data[str(cat)] = float(pivot_df.loc[x_val, cat])
-        data.append(row_data)
-    
+            entry[str(cat)] = float(row[cat])
+        data.append(entry)
+
     categories = [str(c) for c in pivot_df.columns]
-    
     payload = json.dumps(data, ensure_ascii=False)
-    categories_json = json.dumps(categories)
+    cats_json = json.dumps(categories)
     uid = f"stream-{uuid.uuid4().hex[:8]}"
-    
-    display(HTML(f"""
-<div id="{uid}" class="vis"></div>
-<div id="{uid}-status" class="status">Cargando Stream Graph…</div>
-<style>
-  .vis {{ width: 100%; min-height: {height}px; }}
-  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
-</style>
-"""))
-    
+
+    _display_container(uid, height)
+
     js = f"""
 (async () => {{
   const status = document.getElementById('{uid}-status');
   try {{
     const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
-    const d3 = mod.default ?? mod;
-    
+    const d3  = mod.default ?? mod;
+
     const mount = document.getElementById('{uid}');
     mount.innerHTML = '';
-    
+
     const data = {payload};
-    const categories = {categories_json};
-    const W = {width}, H = {height};
-    const margin = {{ top: 20, right: 120, bottom: 40, left: 40 }};
-    const w = W - margin.left - margin.right;
-    const h = H - margin.top - margin.bottom;
-    
-    const svg = d3.select(mount)
-      .append('svg')
-      .attr('width', W)
-      .attr('height', H)
-      .append('g')
-      .attr('transform', `translate(${{margin.left}},${{margin.top}})`);
-    
-    const stack = d3.stack()
-      .keys(categories)
-      .offset(d3.stackOffsetWiggle)
-      .order(d3.stackOrderInsideOut);
-    
+    const categories = {cats_json};
+    const W={width}, H={height};
+    const m={{top:20,right:120,bottom:48,left:44}};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+
+    const svg = d3.select(mount).append('svg').attr('width', W).attr('height', H);
+    const g   = svg.append('g').attr('transform', `translate(${{m.left}},${{m.top}})`);
+
+    const stack = d3.stack().keys(categories).offset(d3.stackOffsetWiggle);
     const series = stack(data);
-    
-    const x = d3.scalePoint()
-      .domain(data.map(d => d.x))
-      .range([0, w]);
-    
+
+    const x = d3.scalePoint().domain(data.map(d => d.x)).range([0, w]);
     const y = d3.scaleLinear()
       .domain([
         d3.min(series, s => d3.min(s, d => d[0])),
         d3.max(series, s => d3.max(s, d => d[1]))
       ])
       .range([h, 0]);
-    
-    const color = d3.scaleOrdinal(d3.{color_scheme} || d3.schemeCategory10);
-    
+
+    const color = d3.scaleOrdinal(categories, d3.schemeCategory10);
+
     const area = d3.area()
       .x(d => x(d.data.x))
       .y0(d => y(d[0]))
       .y1(d => y(d[1]))
       .curve(d3.curveBasis);
-    
-    svg.selectAll('.stream')
+
+    g.selectAll('path.layer')
       .data(series)
-      .enter()
-      .append('path')
-      .attr('class', 'stream')
+      .join('path')
+      .attr('class','layer')
       .attr('d', area)
-      .style('fill', d => color(d.key))
-      .style('opacity', 0.7)
-      .on('mouseover', function(event, d) {{
-        d3.select(this)
-          .style('opacity', 1)
-          .style('stroke', '#333')
-          .style('stroke-width', '2px');
-        
-        const total = d3.sum(d, p => p.data[d.key]);
-        status.textContent = `${{d.key}}: Total = ${{total.toFixed(2)}}`;
+      .attr('fill', d => color(d.key))
+      .attr('opacity', .85)
+      .on('mouseover', function(event, d){{
+        d3.select(this).attr('opacity', 1).attr('stroke', '#333').attr('stroke-width', 1.5);
+        const total = d3.sum(d, p => p.data[d.key] || 0);
+        status.textContent = `${{d.key}} — Total: ${{d3.format(",.0f")(total)}}`;
       }})
-      .on('mouseout', function() {{
-        d3.select(this)
-          .style('opacity', 0.7)
-          .style('stroke', 'none');
-        status.textContent = 'Hover sobre streams para ver detalles';
+      .on('mouseout', function(){{
+        d3.select(this).attr('opacity', .85).attr('stroke', 'none');
+        status.textContent = 'Hover sobre streams para ver totales';
       }});
-    
-    svg.append('g')
+
+    g.append('g')
       .attr('transform', `translate(0,${{h}})`)
       .call(d3.axisBottom(x).tickValues(
-        data.map(d => d.x).filter((d, i) => i % Math.ceil(data.length / 10) === 0)
+        data.map(d => d.x).filter((_, i) => i % Math.max(1, Math.ceil(data.length/10)) === 0)
       ))
       .selectAll('text')
-      .attr('transform', 'rotate(-45)')
-      .style('text-anchor', 'end');
-    
-    const legend = svg.selectAll('.legend')
+      .attr('transform','rotate(-45)')
+      .style('text-anchor','end');
+
+    const legend = g.append('g').attr('transform', `translate(${{w+10}},0)`);
+    legend.selectAll('g')
       .data(categories)
-      .enter()
-      .append('g')
-      .attr('class', 'legend')
-      .attr('transform', (d, i) => `translate(${{w + 10}}, ${{i * 20}})`);
-    
-    legend.append('rect')
-      .attr('width', 15)
-      .attr('height', 15)
-      .style('fill', d => color(d));
-    
-    legend.append('text')
-      .attr('x', 20)
-      .attr('y', 7.5)
-      .attr('dy', '.35em')
-      .style('font-size', '11px')
-      .text(d => d.length > 12 ? d.substring(0, 10) + '...' : d);
-    
-    status.textContent = 'Hover sobre streams para ver detalles';
+      .join('g')
+      .attr('transform', (d,i)=>`translate(0,${{i*20}})`)
+      .call(sel => {{
+        sel.append('rect').attr('width', 12).attr('height', 12).attr('fill', d => color(d));
+        sel.append('text').attr('x', 16).attr('y', 6).attr('dy','.35em').style('font-size','11px').text(d => d);
+      }});
+
+    status.textContent = 'Hover sobre streams para ver totales';
   }} catch (e) {{
-    const msg = (e && e.stack) ? e.stack : (''+e);
-    document.getElementById('{uid}-status').textContent = 'Error: ' + msg;
+    document.getElementById('{uid}-status').textContent = 'Error: ' + (e?.stack || e);
   }}
 }})();
 """
     display(Javascript(js))
     return HTML(f"<small>StreamGraph listo (#{uid})</small>")
 
-
-def RadarChart(df, features=None, name_col='name', width=700, height=700, color_scheme='schemeCategory10'):
+# ========== 4) Radar ==========
+def RadarChart(df, features=None, name_col=None, width=700, height=700):
     """
-    Gráfico de Radar/Spider para comparar múltiples variables.
-    
-    Args:
-        df: DataFrame con los datos
-        features: Lista de columnas numéricas para usar como ejes (si es None, usa todas las numéricas)
-        name_col: Nombre de la columna que identifica cada serie
-        width: Ancho del gráfico
-        height: Alto del gráfico
-        color_scheme: Esquema de colores D3 (ej: 'schemeCategory10', 'schemeSet3')
+    Radar/Spider para comparar múltiples variables por fila.
     """
     df = df.copy()
-    
-    # Si no se especifican features, usar todas las columnas numéricas
     if features is None:
-        features = df.select_dtypes(include=['number']).columns.tolist()
-    
-    # Asegurar que name_col no esté en features
-    if name_col in features:
-        features.remove(name_col)
-    
-    # Convertir a numérico
-    for col in features:
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    
-    # Preparar datos
+        features = df.select_dtypes(include=["number"]).columns.tolist()
+    df = _to_numeric_cols(df, features)
+    df = df.dropna(subset=features)
+
     data = df.to_dict(orient="records")
     payload = json.dumps(data, ensure_ascii=False)
-    features_json = json.dumps(features)
+    feats_json = json.dumps(features)
+    name_expr = f"d['{name_col}']" if name_col else "'Serie ' + i"
     uid = f"radar-{uuid.uuid4().hex[:8]}"
-    
-    # HTML container
-    display(HTML(f"""
-<div id="{uid}" class="vis"></div>
-<div id="{uid}-status" class="status">Cargando Radar Chart…</div>
-<style>
-  .vis {{ width: 100%; min-height: {height}px; }}
-  .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
-</style>
-"""))
-    
-    # JavaScript con D3
+
+    _display_container(uid, height)
+
     js = f"""
 (async () => {{
   const status = document.getElementById('{uid}-status');
   try {{
     const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
-    const d3 = mod.default ?? mod;
-    
+    const d3  = mod.default ?? mod;
+
     const mount = document.getElementById('{uid}');
     mount.innerHTML = '';
-    
+
     const data = {payload};
-    const features = {features_json};
-    const W = {width}, H = {height};
-    const margin = {{ top: 50, right: 100, bottom: 50, left: 100 }};
-    const w = W - margin.left - margin.right;
-    const h = H - margin.top - margin.bottom;
-    const radius = Math.min(w, h) / 2;
-    
-    const svg = d3.select(mount)
-      .append('svg')
-      .attr('width', W)
-      .attr('height', H)
-      .append('g')
-      .attr('transform', `translate(${{W/2}}, ${{H/2}})`);
-    
-    const angleSlice = (Math.PI * 2) / features.length;
-    
-    // Escala radial
-    const maxValue = d3.max(data, d => d3.max(features, f => +d[f]));
-    const rScale = d3.scaleLinear()
-      .domain([0, maxValue])
-      .range([0, radius]);
-    
-    const colorScale = d3.scaleOrdinal(d3.{color_scheme} || d3.schemeCategory10);
-    
-    // Dibujar círculos de niveles
-    const levels = 5;
-    for (let i = 1; i <= levels; i++) {{
-      const levelRadius = (radius / levels) * i;
-      
-      svg.append('circle')
-        .attr('r', levelRadius)
-        .style('fill', 'none')
-        .style('stroke', '#CDCDCD')
-        .style('stroke-dasharray', '3,3');
-      
-      svg.append('text')
-        .attr('x', 5)
-        .attr('y', -levelRadius)
-        .attr('dy', '0.4em')
-        .style('font-size', '10px')
-        .style('fill', '#737373')
-        .text(Math.round((maxValue / levels) * i));
-    }}
-    
-    // Dibujar ejes radiales
-    const axis = svg.selectAll('.axis')
-      .data(features)
-      .enter()
-      .append('g')
-      .attr('class', 'axis');
-    
-    axis.append('line')
-      .attr('x1', 0)
-      .attr('y1', 0)
-      .attr('x2', (d, i) => rScale(maxValue * 1.1) * Math.cos(angleSlice * i - Math.PI/2))
-      .attr('y2', (d, i) => rScale(maxValue * 1.1) * Math.sin(angleSlice * i - Math.PI/2))
-      .style('stroke', '#999')
-      .style('stroke-width', '1px');
-    
-    // Etiquetas de características
-    axis.append('text')
-      .attr('x', (d, i) => (rScale(maxValue * 1.25)) * Math.cos(angleSlice * i - Math.PI/2))
-      .attr('y', (d, i) => (rScale(maxValue * 1.25)) * Math.sin(angleSlice * i - Math.PI/2))
-      .attr('text-anchor', 'middle')
-      .attr('dy', '0.35em')
-      .style('font-size', '12px')
-      .style('font-weight', 'bold')
-      .text(d => d);
-    
-    // Generador de líneas para el radar
-    const radarLine = d3.lineRadial()
-      .radius(d => rScale(d.value))
-      .angle((d, i) => i * angleSlice)
-      .curve(d3.curveLinearClosed);
-    
-    // Preparar datos del radar
-    const radarData = data.map(item => 
-      features.map(f => ({{ axis: f, value: +item[f] }}))
-    );
-    
-    // Dibujar áreas del radar
-    svg.selectAll('.radar-area')
-      .data(radarData)
-      .enter()
-      .append('path')
-      .attr('class', 'radar-area')
-      .attr('d', radarLine)
-      .style('fill', (d, i) => colorScale(i))
-      .style('fill-opacity', 0.2)
-      .style('stroke', (d, i) => colorScale(i))
-      .style('stroke-width', '2px')
-      .on('mouseover', function() {{
-        d3.select(this).style('fill-opacity', 0.5);
-      }})
-      .on('mouseout', function() {{
-        d3.select(this).style('fill-opacity', 0.2);
-      }});
-    
-    // Puntos en los vértices
-    radarData.forEach((item, idx) => {{
-      svg.selectAll(`.radar-circle-${{idx}}`)
-        .data(item)
-        .enter()
-        .append('circle')
-        .attr('class', `radar-circle-${{idx}}`)
-        .attr('r', 4)
-        .attr('cx', (d, i) => rScale(d.value) * Math.cos(angleSlice * i - Math.PI/2))
-        .attr('cy', (d, i) => rScale(d.value) * Math.sin(angleSlice * i - Math.PI/2))
-        .style('fill', colorScale(idx))
-        .style('fill-opacity', 0.8);
+    const features = {feats_json};
+    const W={width}, H={height};
+    const m={{top:40,right:100,bottom:40,left:100}};
+    const w = W - m.left - m.right, h = H - m.top - m.bottom;
+    const R = Math.min(w, h)/2;
+
+    const svg = d3.select(mount).append('svg').attr('width', W).attr('height', H);
+    const g   = svg.append('g').attr('transform', `translate(${{W/2}},${{H/2}})`);
+
+    const angle = (i) => (2*Math.PI) * i / features.length - Math.PI/2;
+
+    const maxValue = d3.max(data, d => d3.max(features, f => +d[f] || 0)) || 1;
+    const r = d3.scaleLinear().domain([0, maxValue]).range([0, R]);
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+    [0.2,0.4,0.6,0.8,1.0].forEach(t => {{
+      g.append('polygon')
+        .attr('points', features.map((_,i)=>[r(maxValue*t)*Math.cos(angle(i)), r(maxValue*t)*Math.sin(angle(i))].join(',')).join(' '))
+        .attr('fill','none').attr('stroke','#e5e7eb');
     }});
-    
-    // Leyenda
-    const legend = svg.selectAll('.legend')
+
+    const axis = g.append('g');
+    features.forEach((f,i) => {{
+      axis.append('line')
+        .attr('x1',0).attr('y1',0)
+        .attr('x2', r(maxValue*1.05)*Math.cos(angle(i)))
+        .attr('y2', r(maxValue*1.05)*Math.sin(angle(i)))
+        .attr('stroke','#cbd5e1');
+      axis.append('text')
+        .attr('x', r(maxValue*1.12)*Math.cos(angle(i)))
+        .attr('y', r(maxValue*1.12)*Math.sin(angle(i)))
+        .attr('text-anchor','middle').attr('dominant-baseline','middle')
+        .style('font-size','11px')
+        .text(f);
+    }});
+
+    const series = data.map((d,i) => features.map((f,idx) => ({{ k: idx, v: +d[f] || 0, name: {name_expr} }})));
+    const line = d3.lineRadial().radius(d => r(d.v)).angle(d => (2*Math.PI)*d.k/features.length).curve(d3.curveLinearClosed);
+
+    g.selectAll('path.area')
+      .data(series)
+      .join('path')
+      .attr('class','area')
+      .attr('d', d => line(d))
+      .attr('fill', (_,i) => color(i))
+      .attr('fill-opacity', .22)
+      .attr('stroke', (_,i) => color(i))
+      .attr('stroke-width', 2)
+      .on('mouseover', function(){{ d3.select(this).attr('fill-opacity', .45); }})
+      .on('mouseout',  function(){{ d3.select(this).attr('fill-opacity', .22); }});
+
+    series.forEach((arr, i) => {{
+      g.selectAll(`.pt-${{i}}`)
+        .data(arr)
+        .join('circle')
+        .attr('class', `pt-${{i}}`)
+        .attr('r', 3)
+        .attr('cx', d => r(d.v)*Math.cos(angle(d.k)))
+        .attr('cy', d => r(d.v)*Math.sin(angle(d.k)))
+        .attr('fill', color(i));
+    }});
+
+    const legend = svg.append('g').attr('transform', `translate(${{W - m.right + 6}},${{m.top}})`);
+    legend.selectAll('g')
       .data(data)
-      .enter()
-      .append('g')
-      .attr('class', 'legend')
-      .attr('transform', (d, i) => `translate(${{radius + 30}}, ${{-radius + i * 25}})`);
-    
-    legend.append('rect')
-      .attr('width', 18)
-      .attr('height', 18)
-      .style('fill', (d, i) => colorScale(i));
-    
-    legend.append('text')
-      .attr('x', 24)
-      .attr('y', 9)
-      .attr('dy', '.35em')
-      .style('font-size', '12px')
-      .text(d => d['{name_col}'] || 'Sin nombre');
-    
-    status.textContent = 'Radar Chart renderizado correctamente.';
+      .join('g')
+      .attr('transform', (d,i)=>`translate(0,${{i*18}})`)
+      .call(sel => {{
+        sel.append('rect').attr('width', 12).attr('height', 12).attr('fill', (_,i)=>color(i));
+        sel.append('text').attr('x', 16).attr('y', 6).attr('dy','.35em').style('font-size','11px')
+          .text((d,i) => {name_expr});
+      }});
+
+    status.textContent = 'Radar renderizado correctamente.';
   }} catch (e) {{
-    const msg = (e && e.stack) ? e.stack : (''+e);
-    document.getElementById('{uid}-status').textContent = 'Error: ' + msg;
+    document.getElementById('{uid}-status').textContent = 'Error: ' + (e?.stack || e);
   }}
 }})();
 """
     display(Javascript(js))
     return HTML(f"<small>RadarChart listo (#{uid})</small>")
 
+# ========== 5) BubblePack (nuevo) ==========
+def BubblePack(df, label, size, group=None, width=800, height=600):
+    """
+    Bubble Pack (circle packing). Si 'group' se provee, crea un pack jerárquico:
+      root -> group -> items(label, value).
+    Si no hay 'group', hace un pack plano (root -> items).
+    - df: DataFrame
+    - label: columna texto para la etiqueta del círculo
+    - size: columna numérica para el tamaño (radio ~ sqrt(size))
+    - group: columna categórica (opcional)
+    """
+    df = df.copy()
+    if not pd.api.types.is_numeric_dtype(df[size]):
+        df[size] = pd.to_numeric(df[size], errors="coerce")
+    df = df.dropna(subset=[label, size] + ([group] if group else []))
 
+    if group:
+        root = {{ "name": "root", "children": [] }}
+        for g, gdf in df.groupby(group):
+            node = {{ "name": str(g), "children": [] }}
+            for _, r in gdf.iterrows():
+                node["children"].append({{ "name": str(r[label]), "value": float(r[size]) }})
+            root["children"].append(node)
+    else:
+        root = {{ "name": "root", "children": [
+            {{ "name": str(r[label]), "value": float(r[size]) }} for _, r in df.iterrows()
+        ] }}
+
+    payload = json.dumps(root, ensure_ascii=False)
+    group_name = json.dumps(group or "")
+    uid = f"bubble-{uuid.uuid4().hex[:8]}"
+
+    _display_container(uid, height)
+
+    js = f"""
+(async () => {{
+  const status = document.getElementById('{uid}-status');
+  try {{
+    const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    const d3  = mod.default ?? mod;
+
+    const mount = document.getElementById('{uid}');
+    mount.innerHTML = '';
+
+    const data = {payload};
+    const groupCol = {group_name};
+    const W={width}, H={height};
+    const svg = d3.select(mount).append('svg').attr('width', W).attr('height', H);
+
+    const root = d3.hierarchy(data).sum(d => d.value || 0).sort((a,b)=>b.value - a.value);
+    d3.pack().size([W, H]).padding(4)(root);
+
+    const groups = groupCol
+      ? root.children?.map(c => c.data.name) ?? []
+      : ["All"];
+
+    const color = d3.scaleOrdinal(groups, d3.schemeCategory10);
+
+    const node = svg.selectAll('g.node')
+      .data(root.leaves())
+      .join('g')
+      .attr('class','node')
+      .attr('transform', d => `translate(${{d.x}},${{d.y}})`);
+
+    node.append('circle')
+      .attr('r', d => d.r)
+      .attr('fill', d => {{
+        const grp = d.parent?.data?.name ?? "All";
+        return color(grp);
+      }})
+      .attr('opacity', .9)
+      .attr('stroke', '#fff');
+
+    node.append('title')
+      .text(d => `${{d.data.name}}\\n${{d3.format(",.2f")(d.data.value)}}`);
+
+    node.append('text')
+      .attr('text-anchor','middle')
+      .attr('dominant-baseline','middle')
+      .style('font-size','11px')
+      .style('pointer-events','none')
+      .text(d => {{
+        const n = d.data.name;
+        return n.length > 12 ? n.slice(0,10) + '…' : n;
+      }});
+
+    // Leyenda (si hay grupos)
+    if (groups.length > 1) {{
+      const legend = svg.append('g').attr('transform', `translate(${{W-120}}, 12)`);
+      legend.selectAll('g')
+        .data(groups)
+        .join('g')
+        .attr('transform', (d,i)=>`translate(0,${{i*18}})`)
+        .call(sel => {{
+          sel.append('rect').attr('width', 12).attr('height', 12).attr('fill', d => color(d));
+          sel.append('text').attr('x', 16).attr('y', 6).attr('dy','.35em').style('font-size','11px').text(d => d);
+        }});
+    }}
+
+    status.textContent = 'BubblePack renderizado.';
+  }} catch (e) {{
+    document.getElementById('{uid}-status').textContent = 'Error: ' + (e?.stack || e);
+  }}
+}})();
+"""
+    display(Javascript(js))
+    return HTML(f"<small>BubblePack listo (#{uid})</small>")
