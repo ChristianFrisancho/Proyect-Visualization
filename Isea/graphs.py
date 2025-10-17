@@ -789,3 +789,557 @@ def BubblePack(df, label, size, group=None, width=800, height=600):
 """
     display(Javascript(js))
     return HTML(f"<small>BubblePack listo (#{uid})</small>")
+
+def RadialStackedBar(
+    df,
+    group_col,
+    category_col,
+    value_col,
+    *,
+    agg='sum',
+    width=928,
+    height=928,
+    inner_radius=180,
+    pad_angle=0.015,
+    color_scheme='schemeSpectral',
+    sort_on_click=True,
+    title=None,
+    custom_colors=None
+):
+    """
+    Radial stacked bar chart mejorado con ordenamiento animado.
+    
+    Args:
+        df: DataFrame en formato largo
+        group_col: columna para cada barra alrededor del círculo
+        category_col: columna para capas apiladas
+        value_col: valores numéricos
+        agg: 'sum' o 'mean'
+        width/height: dimensiones SVG
+        inner_radius: radio interno (espacio para leyenda)
+        pad_angle: espaciado angular
+        color_scheme: esquema de colores D3 (ej: 'schemeSpectral')
+        sort_on_click: permite ordenar al hacer clic (True por defecto)
+        title: título opcional para el gráfico
+        custom_colors: lista de colores personalizados (hexadecimal)
+    """
+    df = df.copy()
+
+    if not pd.api.types.is_numeric_dtype(df[value_col]):
+        df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
+    
+    df = df.dropna(subset=[group_col, category_col, value_col])
+
+    if agg not in ('sum', 'mean'):
+        agg = 'sum'
+    
+    grouped = df.groupby([group_col, category_col])[value_col].agg(agg).reset_index()
+    pivot_df = grouped.pivot(index=group_col, columns=category_col, values=value_col).fillna(0)
+    pivot_df = pivot_df.sort_index()
+
+    categories = [str(c) for c in pivot_df.columns]
+    data = []
+    for g in pivot_df.index:
+        obj = {"group": str(g)}
+        for c in pivot_df.columns:
+            obj[str(c)] = float(pivot_df.loc[g, c])
+        data.append(obj)
+
+    payload = json.dumps(data, ensure_ascii=False)
+    categories_json = json.dumps(categories)
+    title_json = json.dumps(title if title else value_col)
+    
+    # Procesar colores personalizados
+    if custom_colors is not None:
+        if isinstance(custom_colors, set):  # Convertir set a lista si es necesario
+            custom_colors = list(custom_colors)
+        colors_json = json.dumps(custom_colors)
+        use_custom_colors = "true"
+    else:
+        colors_json = "null"
+        use_custom_colors = "false"
+    
+    uid = f"radialstack-{uuid.uuid4().hex[:8]}"
+
+    display(HTML(f"""
+<div id="{uid}-container" style="display: flex; justify-content: center; align-items: center; margin-top: 20px;">
+  <div id="{uid}" style="position: relative;"></div>
+</div>
+<div id="{uid}-toolbar" style="text-align: center; margin: 10px 0;">
+  <button id="{uid}-sort-btn" style="padding: 8px 15px; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; font-weight: bold;">
+    Ordenar por tamaño
+  </button>
+  <button id="{uid}-reset-btn" style="padding: 8px 15px; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; margin-left: 10px;">
+    Restaurar orden
+  </button>
+</div>
+<div id="{uid}-status" style="text-align: center; font-size: 12px; color: #666; margin: 12px 0;">
+  Cargando visualización...
+</div>
+"""))
+
+    js = f"""
+(async () => {{
+  const status = document.getElementById('{uid}-status');
+  
+  try {{
+    const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    const d3 = mod.default ?? mod;
+
+    // Asegurarse que D3 está cargado
+    console.log("D3 cargado correctamente:", d3.version);
+
+    // Referencias a los botones
+    const sortBtn = document.getElementById('{uid}-sort-btn');
+    const resetBtn = document.getElementById('{uid}-reset-btn');
+    
+    if (!sortBtn || !resetBtn) {{
+      console.error("Botones no encontrados:", {{sortBtn, resetBtn}});
+      throw new Error("No se pudieron encontrar los botones de ordenamiento");
+    }}
+
+    const mount = document.getElementById('{uid}');
+    mount.innerHTML = '';
+
+    // Datos originales como texto JSON para poder restaurarlos después
+    const originalDataJson = '{payload}';
+    let data = JSON.parse(originalDataJson);
+    const keys = {categories_json};
+    const title = {title_json};
+    const customColors = {colors_json};
+    const useCustomColors = {use_custom_colors};
+    
+    const W = {width};
+    const H = {height};
+    const innerRadius = {inner_radius};
+    const outerRadius = Math.min(W, H) / 2 - 60;
+    const padAngle = {pad_angle};
+
+    // Estado de ordenamiento
+    let sorted = false;
+    
+    // SVG con viewBox para mejor responsividad
+    const svg = d3.select(mount)
+      .append('svg')
+      .attr('width', W)
+      .attr('height', H)
+      .attr('viewBox', [-W / 2, -H / 2, W, H])
+      .style('width', '100%')
+      .style('height', 'auto')
+      .style('font', '11px sans-serif');
+      
+    // Grupo principal
+    const g = svg.append('g');
+
+    // Escala angular (alrededor del círculo)
+    const x = d3.scaleBand()
+      .domain(data.map(d => d.group))
+      .range([0, 2 * Math.PI])
+      .align(0);
+
+    // Escala radial (desde el centro hacia afuera)
+    const yMax = d3.max(data, d => d3.sum(keys, k => +d[k]));
+    const y = d3.scaleRadial()
+      .domain([0, yMax])
+      .range([innerRadius, outerRadius]);
+
+    // Configuración de colores
+    let colorScale;
+    
+    if (useCustomColors) {{
+      // Usar colores personalizados
+      colorScale = d3.scaleOrdinal()
+        .domain(keys)
+        .range(customColors);
+    }} else {{
+      // Usar esquema de colores de D3
+      const numColors = keys.length;
+      let colorRange;
+      
+      if ('{color_scheme}' === 'schemeSpectral') {{
+        colorRange = numColors <= 3 ? d3.schemeSpectral[3] : 
+                    numColors <= 11 ? d3.schemeSpectral[numColors] : 
+                    d3.schemeSpectral[11];
+      }} else if ('{color_scheme}'.startsWith('scheme')) {{
+        try {{
+          colorRange = d3['{color_scheme}'][Math.max(Math.min(numColors, 12), 3)] || d3.schemeCategory10;
+        }} catch (e) {{
+          colorRange = d3.schemeCategory10;
+        }}
+      }} else {{
+        colorRange = d3.schemeCategory10;
+      }}
+      
+      colorScale = d3.scaleOrdinal()
+        .domain(keys)
+        .range(colorRange);
+    }}
+
+    // Formatos para números
+    const formatValue = d3.format(",.1f");
+    const formatPercent = d3.format(".1%");
+
+    // Generador de arcos
+    const arc = d3.arc()
+      .innerRadius(d => y(d[0]))
+      .outerRadius(d => y(d[1]))
+      .startAngle(d => x(d.data.group))
+      .endAngle(d => x(d.data.group) + x.bandwidth())
+      .padAngle(padAngle)
+      .padRadius(innerRadius);
+
+    // FUNCIÓN RENDER MEJORADA
+    function render(animate = false, duration = 1500) {{
+      console.log("Renderizando con animación:", animate, "duración:", duration);
+      
+      // Stack generator
+      const series = d3.stack().keys(keys)(data);
+      
+      // Actualizar dominio x (importante para reordenamiento)
+      x.domain(data.map(d => d.group));
+
+      // Selección y actualización de grupos de barras
+      const barGroups = g.selectAll('.series-group')
+        .data(series, d => d.key);
+      
+      barGroups.exit().remove();
+      
+      // Crear nuevos grupos para series
+      const barGroupsEnter = barGroups.enter()
+        .append('g')
+        .attr('class', 'series-group')
+        .attr('fill', d => colorScale(d.key));
+      
+      // Unir grupos existentes y nuevos
+      const allBarGroups = barGroupsEnter.merge(barGroups);
+      
+      // Efecto visual de transición general
+      if (animate) {{
+        allBarGroups
+          .transition()
+          .duration(200)
+          .style('opacity', 0.7)
+          .transition()
+          .duration(200)
+          .style('opacity', 1);
+      }}
+
+      // Para cada grupo, actualizar los paths (segmentos del arco)
+      allBarGroups.each(function(seriesData) {{
+        // Seleccionar paths existentes y vincular nuevos datos
+        const paths = d3.select(this).selectAll('path')
+          .data(seriesData.map(d => ({{...d, key: seriesData.key}})), 
+                d => d.data.group);
+        
+        // Quitar paths que ya no necesitamos
+        paths.exit()
+          .transition()
+          .duration(animate ? duration : 0)
+          .attrTween('d', d => {{
+            // Animación de salida (colapsar al centro)
+            const i = d3.interpolate(
+              d,
+              {{...d, 1: d[0]}}  // Colapsar altura a cero
+            );
+            return t => arc(i(t));
+          }})
+          .remove();
+        
+        // Actualizar paths existentes con transición suave
+        paths.transition()
+          .duration(animate ? duration : 0)
+          .attrTween('d', function(d) {{
+            // Crear interpolación simple para una transición suave
+            const start = this.getAttribute('d') || arc({{...d, 1: d[0]}}); // Fallback
+            const end = arc(d);
+            return t => {{
+              return start.length > 0 ? d3.interpolate(start, end)(t) : end;
+            }};
+          }});
+        
+        // Añadir nuevos paths con animación de entrada
+        paths.enter()
+          .append('path')
+          .attr('d', d => {{
+            // Comienza como un arco sin altura
+            return arc({{...d, 1: d[0]}});
+          }})
+          .attr('stroke', '#fff')
+          .attr('stroke-width', 1)
+          .style('opacity', 0.85)
+          .transition()
+          .duration(animate ? duration : 0)
+          .attrTween('d', d => {{
+            // Animación de crecimiento
+            const i = d3.interpolate(
+              {{...d, 1: d[0]}},  // Comenzar con altura cero
+              d
+            );
+            return t => arc(i(t));
+          }})
+          .on('end', function() {{
+            // Configurar eventos después de la animación
+            d3.select(this)
+              .on('mouseover', function(event, d) {{
+                // Destacar al pasar el ratón
+                d3.select(this)
+                  .style('opacity', 1)
+                  .style('stroke', '#333')
+                  .style('stroke-width', 2);
+                
+                // Mostrar información
+                const total = d3.sum(keys, k => d.data[k]);
+                const value = d.data[d.key];
+                const percentage = value / total;
+                
+                status.textContent = `${{d.data.group}} – ${{d.key}}: ${{formatValue(value)}} (${{formatPercent(percentage)}})`;
+              }})
+              .on('mouseout', function() {{
+                // Restaurar estilo al salir
+                d3.select(this)
+                  .style('opacity', 0.85)
+                  .style('stroke', '#fff')
+                  .style('stroke-width', 1);
+                
+                status.textContent = sorted ? 
+                  'Visualización ordenada por tamaño. Haz clic en "Restaurar orden" para volver al orden original.' : 
+                  'Haz clic en "Ordenar por tamaño" para reorganizar.';
+              }})
+              .append('title')
+              .text(d => {{
+                const total = d3.sum(keys, k => d.data[k]);
+                const value = d.data[d.key];
+                const percentage = value / total;
+                return `${{d.data.group}} - ${{d.key}}: ${{formatValue(value)}} (${{formatPercent(percentage)}})`;
+              }});
+          }});
+      }});
+      
+      // Actualizar etiquetas de grupos (en el perímetro)
+      const labelGroups = g.selectAll('.label-group')
+        .data(data, d => d.group);
+      
+      labelGroups.exit().remove();
+      
+      const labelGroupsEnter = labelGroups.enter()
+        .append('g')
+        .attr('class', 'label-group')
+        .attr('text-anchor', 'middle');
+      
+      const allLabelGroups = labelGroupsEnter.merge(labelGroups);
+      
+      allLabelGroups.transition()
+        .duration(animate ? duration : 0)
+        .attr('transform', d => {{
+          const angle = ((x(d.group) + x.bandwidth() / 2) * 180 / Math.PI) - 90;
+          return `rotate(${{angle}})translate(${{outerRadius + 10}},0)`;
+        }});
+      
+      // Añadir líneas y textos a las etiquetas
+      labelGroupsEnter.append('line')
+        .attr('x1', 0)
+        .attr('x2', 0)
+        .attr('y1', 0)
+        .attr('y2', 7)
+        .attr('stroke', '#999')
+        .attr('stroke-width', 1);
+      
+      labelGroupsEnter.append('text')
+        .style('font-size', '9px')
+        .style('fill', '#333');
+      
+      allLabelGroups.select('text')
+        .transition()
+        .duration(animate ? duration : 0)
+        .attr('transform', d => {{
+          const angle = (x(d.group) + x.bandwidth() / 2);
+          return ((angle + Math.PI / 2) % (2 * Math.PI) < Math.PI) ? 
+            'rotate(90)translate(10,-2)' : 
+            'rotate(-90)translate(-10,-2)';
+        }})
+        .text(d => d.group);
+    }}
+
+    // Grid circular (círculos concéntricos)
+    const yTicks = y.ticks(5).slice(1);
+    
+    g.append('g')
+      .selectAll('circle')
+      .data(yTicks)
+      .join('circle')
+      .attr('r', y)
+      .style('fill', 'none')
+      .style('stroke', '#ddd')
+      .style('stroke-dasharray', '2,4')
+      .style('stroke-width', 0.5);
+
+    // Etiquetas de valores en círculos concéntricos
+    g.append('g')
+      .attr('text-anchor', 'middle')
+      .selectAll('text')
+      .data(yTicks)
+      .join('text')
+      .attr('y', d => -y(d))
+      .attr('dy', '-0.35em')
+      .attr('fill', '#666')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 3)
+      .attr('stroke-linejoin', 'round')
+      .attr('paint-order', 'stroke')
+      .style('font-size', '9px')
+      .text(d => d3.format('~s')(d))
+      .clone(true)
+      .attr('stroke', 'none')
+      .attr('fill', '#666');
+
+    // Leyenda central mejorada
+    const legendG = svg.append('g')
+      .attr('class', 'legend')
+      .attr('text-anchor', 'start');
+    
+    // Fondo para la leyenda central
+    if (keys.length > 1) {{
+      legendG.append('rect')
+        .attr('x', -innerRadius * 0.8)
+        .attr('y', -innerRadius * 0.6)
+        .attr('width', innerRadius * 1.6)
+        .attr('height', Math.min(keys.length * 22 + 40, innerRadius * 1.2))
+        .attr('rx', 10)
+        .attr('ry', 10)
+        .attr('fill', '#fff')
+        .attr('opacity', 0.8);
+    }}
+    
+    // Título en el centro de la leyenda
+    if (title) {{
+      legendG.append('text')
+        .attr('x', 0)
+        .attr('y', -innerRadius * 0.4)
+        .attr('text-anchor', 'middle')
+        .attr('font-size', '14px')
+        .attr('font-weight', 'bold')
+        .text(title);
+    }}
+
+    // Distribuir items de leyenda en dos columnas si hay muchos
+    const legendItems = legendG.selectAll('.legend-item')
+      .data(keys)
+      .join('g')
+      .attr('class', 'legend-item')
+      .attr('transform', (d, i) => {{
+        const itemsPerColumn = Math.min(Math.ceil(keys.length / 2), 6);
+        const column = Math.floor(i / itemsPerColumn);
+        const row = i % itemsPerColumn;
+        const x = (column === 0 ? -innerRadius * 0.6 : innerRadius * 0.1);
+        const y = -innerRadius * 0.25 + row * 22;
+        return `translate(${{x}},${{y}})`;
+      }});
+
+    // Cuadrados de color en la leyenda
+    legendItems.append('rect')
+      .attr('width', 16)
+      .attr('height', 16)
+      .attr('fill', d => colorScale(d))
+      .attr('stroke', '#999')
+      .attr('stroke-width', 0.5)
+      .attr('rx', 2);
+
+    // Texto de la leyenda
+    legendItems.append('text')
+      .attr('x', 22)
+      .attr('y', 9)
+      .attr('dy', '0.32em')
+      .attr('font-size', '11px')
+      .text(d => d);
+
+    // Renderizado inicial
+    render(false);
+    
+    // FUNCIÓN DE ORDENAMIENTO con animación
+    function sortBySize() {{
+      console.log("Ejecutando ordenamiento por tamaño...");
+      
+      // No hacer nada si ya está ordenado
+      if (sorted) return;
+      
+      // Ordenar datos por valor total descendente
+      data.sort((a, b) => {{
+        const sumA = d3.sum(keys, k => +a[k]);
+        const sumB = d3.sum(keys, k => +b[k]);
+        return d3.descending(sumA, sumB);
+      }});
+      
+      // Actualizar estado
+      sorted = true;
+      
+      // Cambiar estilo de botones
+      sortBtn.style.backgroundColor = '#e5e7eb';
+      sortBtn.style.fontWeight = 'bold';
+      resetBtn.style.backgroundColor = '#f3f4f6';
+      resetBtn.style.fontWeight = 'normal';
+      
+      // Renderizar con animación
+      render(true);
+      
+      // Actualizar mensaje de estado
+      status.textContent = 'Visualización ordenada por tamaño. Haz clic en "Restaurar orden" para volver al orden original.';
+    }}
+    
+    // FUNCIÓN PARA RESTAURAR ORDEN ORIGINAL
+    function resetOrder() {{
+      console.log("Restaurando orden original...");
+      
+      // No hacer nada si ya está en orden original
+      if (!sorted) return;
+      
+      // Restaurar datos originales
+      data = JSON.parse(originalDataJson);
+      
+      // Actualizar estado
+      sorted = false;
+      
+      // Cambiar estilo de botones
+      sortBtn.style.backgroundColor = '#f3f4f6';
+      sortBtn.style.fontWeight = 'normal';
+      resetBtn.style.backgroundColor = '#e5e7eb';
+      resetBtn.style.fontWeight = 'bold';
+      
+      // Renderizar con animación
+      render(true);
+      
+      // Actualizar mensaje de estado
+      status.textContent = 'Orden original restaurado. Haz clic en "Ordenar por tamaño" para reorganizar.';
+    }}
+    
+    // CONFIGURAR LOS EVENT HANDLERS
+    
+    // 1. Usar evento onclick directamente (más compatible)
+    sortBtn.onclick = sortBySize;
+    resetBtn.onclick = resetOrder;
+    
+    // 2. Agregar también event listeners usando D3 como alternativa
+    d3.select(sortBtn).on("click", sortBySize);
+    d3.select(resetBtn).on("click", resetOrder);
+    
+    // 3. Opcionalmente, agregar la funcionalidad de clic en el SVG
+    if ({sort_on_click}) {{
+      svg.on("click", () => {{
+        if (sorted) {{
+          resetOrder();
+        }} else {{
+          sortBySize();
+        }}
+      }});
+    }}
+    
+    // Mensaje inicial
+    status.textContent = 'Haz clic en "Ordenar por tamaño" para reorganizar el gráfico.';
+
+  }} catch (e) {{
+    console.error("Error en RadialStackedBar:", e);
+    status.textContent = 'Error: ' + (e.message || e);
+  }}
+}})();
+"""
+    display(Javascript(js))
+    return HTML(f"<small>Radial Stacked Bar Chart listo (#{uid})</small>")
