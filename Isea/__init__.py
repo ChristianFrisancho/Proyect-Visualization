@@ -2,7 +2,7 @@
 from ._version import __version__
 from .base_widget import IseaWidget
 from .graphs import (
-    ScatterBrush,      # scatter con tooltip/leyenda
+    ScatterBrushOld,      # scatter con tooltip/leyenda
     BeeSwarmCapacity,
     ParallelEnergy,
     RadialStackedBar,
@@ -10,6 +10,10 @@ from .graphs import (
     BubblePack 
 )
 from .layouts import LinkedEnergyDashboard
+
+#Added by Milan
+from .scatter import ScatterBrush            # new class
+
 
 
 

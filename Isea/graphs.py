@@ -24,7 +24,7 @@ def _display_container(uid, min_h):
 """
     display(HTML(html))
 
-def ScatterBrush(
+def ScatterBrushOld(
     df,
     x,
     y,
@@ -1896,3 +1896,14 @@ def BubblePack(
 
     display(Javascript(js))
     return HTML(f"<small>BubblePack listo (#{uid})</small>")
+
+
+### added by Milan 12/10/2025
+
+def ScatterBrush_demo(df, **opts):
+    """Backward-friendly shim that returns the new widget."""
+    from .scatter import ScatterBrush
+    return ScatterBrush(data=df.to_dict("records"), **opts)
+
+
+### End of "added by Milan 12/10/2025"
