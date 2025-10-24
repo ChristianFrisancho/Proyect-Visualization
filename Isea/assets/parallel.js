@@ -118,15 +118,17 @@ export function render({ model, el }) {
     // ---- panel selección ----
     const selHead = h("div", { textContent: "point selection — 0 points" }, right);
     selHead.style.cssText =
-      "font:600 13px system-ui,Segoe UI,Arial;color:#111827;margin:2px 0 8px 0";
+    "font:600 13px system-ui,Segoe UI,Arial;color:#111827;margin:2px 0 8px 0";
 
     const btnClear = h("button", { textContent: "Limpiar selección" }, right);
     btnClear.style.cssText =
-      "font:12px system-ui;padding:6px 8px;border:1px solid #334155;border-radius:8px;background:#fff;color:#111827;margin:0 0 10px 0;cursor:pointer";
+    "font:12px system-ui;padding:8px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#111827;margin:0 0 10px 0;cursor:pointer";
 
     const selBox = h("div", {}, right);
+    // —— contenedor con look de tarjeta
     selBox.style.cssText =
-      `max-height:${panelH}px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;font:12px system-ui,Arial;color:#111827;background:#fff`;
+    `max-height:${panelH}px;overflow:auto;border:1px solid #e2e8f0;border-radius:12px;` +
+    `background:#ffffff;box-shadow:0 1px 2px rgba(0,0,0,.04);`;
 
     // ---- colors ----
     const color = d3.scaleOrdinal(
@@ -217,32 +219,80 @@ export function render({ model, el }) {
     let selected = new Set();
 
     function renderSelPanel(rows) {
-      selHead.textContent = `point selection — ${rows.length} points`;
-      selBox.innerHTML = "";
-      if (!rows.length) { selBox.textContent = "Sin selección."; return; }
-      const cols = ["Country", ...DIMS];
-      const tbl = document.createElement("table");
-      tbl.style.borderCollapse = "collapse"; tbl.style.width = "100%";
-      const thead = tbl.createTHead(); const hr = thead.insertRow();
-      cols.forEach((c) => {
+    selHead.textContent = `point selection — ${rows.length} points`;
+    selBox.innerHTML = "";
+
+    // wrapper para permitir scroll horizontal si hay muchas columnas
+    const wrap = document.createElement("div");
+    wrap.style.overflow = "auto";
+    wrap.style.maxWidth = "100%";
+    selBox.appendChild(wrap);
+
+    if (!rows.length) {
+        const empty = document.createElement("div");
+        empty.textContent = "Sin selección.";
+        empty.style.cssText = "padding:12px 14px;font:12px system-ui;color:#475569";
+        wrap.appendChild(empty);
+        return;
+    }
+
+    const cols = ["Country", ...DIMS];
+    const nf = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
+
+    const tbl = document.createElement("table");
+    // Look moderno
+    tbl.style.borderCollapse = "separate";
+    tbl.style.borderSpacing = "0";
+    tbl.style.width = "100%";
+    tbl.style.minWidth = `${160 + (cols.length - 1) * 140}px`;
+    wrap.appendChild(tbl);
+
+    // THEAD
+    const thead = tbl.createTHead();
+    const hr = thead.insertRow();
+    hr.style.position = "sticky";
+    hr.style.top = "0";
+    hr.style.background = "#f8fafc";
+    hr.style.boxShadow = "inset 0 -1px 0 #e2e8f0";
+
+    cols.forEach((c, i) => {
         const th = document.createElement("th");
         th.textContent = c;
-        th.style.textAlign = "left"; th.style.padding = "4px 6px";
-        th.style.borderBottom = "1px solid #e5e7eb"; th.style.position = "sticky";
-        th.style.top = "0"; th.style.background = "#fff"; th.style.fontWeight = "600";
+        th.style.padding = "10px 12px";
+        th.style.textAlign = i === 0 ? "left" : "right";
+        th.style.font = "600 12px system-ui";
+        th.style.color = "#0f172a";
+        if (i === 0) th.style.borderTopLeftRadius = "12px";
+        if (i === cols.length - 1) th.style.borderTopRightRadius = "12px";
         hr.appendChild(th);
-      });
-      const tb = tbl.createTBody();
-      rows.forEach((r) => {
+    });
+
+    // TBODY
+    const tb = tbl.createTBody();
+    rows.forEach((r, idx) => {
         const tr = tb.insertRow();
-        cols.forEach((c) => {
-          const td = tr.insertCell();
-          td.textContent = r[c] ?? 0;
-          td.style.padding = "4px 6px"; td.style.borderBottom = "1px solid #f1f5f9";
+
+        // zebra + hover
+        tr.style.background = idx % 2 ? "#f9fafb" : "#ffffff";
+        tr.addEventListener("mouseenter", () => (tr.style.background = "#eef2ff"));
+        tr.addEventListener("mouseleave", () => (tr.style.background = idx % 2 ? "#f9fafb" : "#ffffff"));
+
+        cols.forEach((c, i) => {
+        const td = tr.insertCell();
+        const v = r[c];
+        const isNum = i > 0 && Number.isFinite(+v);
+
+        td.textContent = isNum ? nf.format(+v) : (v ?? "—");
+        td.style.padding = "10px 12px";
+        td.style.textAlign = i === 0 ? "left" : "right";
+        td.style.font = "12px system-ui";
+        td.style.color = "#0f172a";
+        td.style.borderBottom = "1px solid #eef2f7";
+        if (i === 0) td.style.fontWeight = "600";
         });
-      });
-      selBox.appendChild(tbl);
+    });
     }
+
 
     function pushSelection(type = "line") {
       const keys = [...selected];
