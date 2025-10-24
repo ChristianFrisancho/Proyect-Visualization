@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "Isea"
-version = "0.1.0"
+version = "0.2.0"
 description = "Isea: D3-powered visualizations for Python"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["anywidget>=0.9", "traitlets>=5.9"]
+dependencies = ["anywidget>=0.9", "traitlets>=5.9", "pandas>=1.5", "numpy>=1.21", "ipywidgets>=7.0"]
 
 [tool.hatch.build]
 include = ["Isea/**", "README.md","Isea/assets/**" ]
