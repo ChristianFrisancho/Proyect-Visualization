@@ -1,29 +1,31 @@
 # Isea/__init__.py
 from ._version import __version__
 from .base_widget import IseaWidget
+
+# NUEVO widget (anywidget)
+from .parallel import ParallelEnergy
+
 from .graphs import (
     ScatterBrushOld,      # scatter con tooltip/leyenda
     BeeSwarmCapacity,
-    ParallelEnergy,
+    # ParallelEnergy,     # <- QUITAR/COMENTAR para evitar duplicado
     RadialStackedBar,
     WorldRenewable,
-    BubblePack 
+    BubblePack,
 )
 from .layouts import LinkedEnergyDashboard
 
-#Added by Milan
-from .scatter import ScatterBrush            # new class
-
-
-
+# Added by Milan
+from .scatter import ScatterBrush
 
 __all__ = [
     "__version__",
+    "IseaWidget",
     "ScatterBrush",
     "BeeSwarmCapacity",
-    "ParallelEnergy",
+    "ParallelEnergy",          # <-- el del widget
     "RadialStackedBar",
     "WorldRenewable",
-    "BubblePack"
+    "BubblePack",
+    "LinkedEnergyDashboard",
 ]
-__all__ += ["LinkedEnergyDashboard"]

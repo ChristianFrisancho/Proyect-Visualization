@@ -2,7 +2,8 @@
 from IPython.display import HTML, Javascript, display
 from .widgets import ensure_bus, card
 from .medias import prepare_energy
-from .graphs import BubblePack, ParallelEnergy, WorldRenewable, ScatterBrushOld
+from .graphs import BubblePack,WorldRenewable, ScatterBrushOld
+from .parallel import ParallelEnergy
 
 def LinkedEnergyDashboard(df, year=None, color_by="DominantTech", width=1280, height=900):
     """

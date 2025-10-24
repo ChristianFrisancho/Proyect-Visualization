@@ -202,76 +202,52 @@ def ScatterBrushOld(
 
 
 ########
-def ParallelEnergy(
+def ParallelEnergyOld(
     df,
     years,
-    tech_col="Technology_std",   # columnas con 'Solar','Wind','Hydro','Bio','Fossil'
+    tech_col="Technology_std",
     label_col="Country",
     dims=("Solar","Wind","Hydro","Bio","Fossil"),
-    year_start=None,             # ej. "F2023"; si None, toma el último de 'years'
+    year_start=None,
     width=1150,
     height=600,
     log_axes=False,
-    normalize=False,             # normaliza cada eje por año (0-1) para comparar “forma”
+    normalize=False,
     reorder=True,
+    mount_id=None,
 ):
-    """
-    Paralelas interactivas por AÑO (slider):
-      - df: tabla larga con columnas: [Country, Technology_std, F2000..F2023]
-      - years: lista de columnas de año (["F2000",...,"F2023"])
-      - dims: orden inicial de tecnologías a mostrar
-    """
     import json, uuid
     import pandas as pd
     from IPython.display import HTML, Javascript, display
 
-    # --- sanity ---
     years = [c for c in years if c in df.columns]
     if not years:
-        raise ValueError("La lista 'years' está vacía o no coincide con las columnas del dataframe.")
+        raise ValueError("years no coincide con columnas del dataframe.")
+    for y in years:
+        df[y] = pd.to_numeric(df[y], errors="coerce")
+
+    if tech_col not in df.columns or label_col not in df.columns:
+        raise KeyError("Faltan columnas requeridas.")
 
     dims = list(dims)
-    miss_req = [c for c in [tech_col, label_col] if c not in df.columns]
-    if miss_req:
-        raise KeyError(f"Faltan columnas requeridas {miss_req}")
-
-    # quedarnos solo con las 5 tecnologías de 'dims'
     d = df[df[tech_col].isin(dims)].copy()
-
-    # a números
-    for y in years:
-        d[y] = pd.to_numeric(d[y], errors="coerce")
-
-    # agrega por país+tecnología (por si hay desgloses)
     agg = d.groupby([label_col, tech_col])[years].sum(min_count=1).reset_index()
 
-    # construyo un “cubo”: por país, vector anual por tecnología
-    countries = agg[label_col].unique().tolist()
+    # registros: cada país tiene arrays por tecnología
     recs = []
-    for c in countries:
-        block = agg[agg[label_col] == c]
+    for c, block in agg.groupby(label_col):
         item = {"label": c}
         for t in dims:
             row = block[block[tech_col] == t]
             if row.empty:
-                item[t] = [0.0]*len(years)
+                item[t] = [0.0] * len(years)
             else:
-                vals = []
                 r = row.iloc[0]
-                for y in years:
-                    v = float(r[y]) if pd.notna(r[y]) else 0.0
-                    vals.append(v)
-                item[t] = vals
+                item[t] = [float(r[y]) if pd.notna(r[y]) else 0.0 for y in years]
         recs.append(item)
 
-    payload = {
-        "years": years,
-        "dims": dims,
-        "records": recs,
-        "label": label_col,
-    }
-
-    uid = f"parY-{uuid.uuid4().hex[:8]}"
+    payload = {"years": years, "dims": dims, "records": recs, "label": label_col}
+    uid = mount_id or f"parY-{uuid.uuid4().hex[:8]}"
     jsdata = json.dumps(payload, ensure_ascii=False)
     start_year = year_start if (year_start in years) else years[-1]
 
@@ -279,7 +255,7 @@ def ParallelEnergy(
 <div id="{uid}" class="vis"></div>
 <div id="{uid}-status" class="status">Renderizando…</div>
 <style>
-  .vis {{ width: 100%; min-height: 80px; }}
+  .vis {{ width:100%; min-height:80px; }}
   .status {{ font-size:12px; color:#64748b; margin:6px 2px; }}
 </style>
 """))
@@ -291,244 +267,214 @@ def ParallelEnergy(
     const mod = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
     const d3  = mod.default ?? mod;
 
-    // ===== Datos base =====
+    // ====== datos base ======
     const pack = {jsdata};
-    let DIMS   = pack.dims.slice();            // orden de ejes (arrastrable)
+    let DIMS = pack.dims.slice();
     const YEARS = pack.years;
     const R = pack.records;
 
     const W = {width}, H = {height};
-    const m = {{ top: 92, right: 260, bottom: 40, left: 80 }};
+    const m = {{ top: 105, right: 260, bottom: 40, left: 80 }};
     const iW = W - m.left - m.right, iH = H - m.top - m.bottom;
 
     const useLog = {str(log_axes).lower()};
     const normalize = {str(normalize).lower()};
     const allowReorder = {str(reorder).lower()};
 
-    // colores coherentes con el resto de la lib
     const color = d3.scaleOrdinal(
       ["Fossil","Hydro","Wind","Solar","Bio"],
       ["#60a5fa","#f59e0b","#ef4444","#2dd4bf","#9b59b6"]
     );
 
-    // ===== helpers =====
-    function datasetFor(idxYear) {{
-      const yearName = YEARS[idxYear];
+    function datasetFor(idx) {{
       return R.map(r => {{
-        const obj = {{ Country: r.label }};
-        // valores por tecnología ese año
-        let bestDim = DIMS[0], bestVal = +r[DIMS[0]][idxYear] || 0;
-        for (const dim of DIMS) {{
-          const v = +r[dim][idxYear] || 0;
-          obj[dim] = v;
-          if (v > bestVal) {{ bestVal = v; bestDim = dim; }}
+        const o={{ Country:r.label }};
+        let best=DIMS[0], bestV=+r[DIMS[0]][idx]||0;
+        for(const k of DIMS) {{
+          const v=+r[k][idx]||0; o[k]=v; if(v>bestV){{bestV=v;best=k;}}
         }}
-        obj.DominantTech = bestDim;
-        return obj;
+        o.DominantTech=best; return o;
       }});
     }}
-
-    function normalizeByDim(data) {{
-      // normaliza 0-1 por cada dim para ese año
-      const ext = {{}};
-      for (const d of DIMS) {{
-        const vals = data.map(x => +x[d]).filter(Number.isFinite);
-        const mn = d3.min(vals), mx = d3.max(vals);
-        ext[d] = (mx>mn) ? [mn,mx] : [0,1];
+    function normalizeByDim(data){{
+      const ext={{}};
+      for(const k of DIMS){{
+        const vals=data.map(d=>+d[k]).filter(Number.isFinite);
+        const mn=d3.min(vals), mx=d3.max(vals); ext[k]=(mx>mn)?[mn,mx]:[0,1];
       }}
-      return data.map(row => {{
-        const o = {{ Country: row.Country, DominantTech: row.DominantTech }};
-        for (const d of DIMS) {{
-          const [mn,mx] = ext[d];
-          const v = +row[d]||0;
-          o[d] = (mx>mn) ? (v-mn)/(mx-mn) : 0;
-        }}
+      return data.map(d=>{{
+        const o={{Country:d.Country, DominantTech:d.DominantTech}};
+        for(const k of DIMS){{ const [mn,mx]=ext[k], v=+d[k]||0; o[k]=(mx>mn)?(v-mn)/(mx-mn):0; }}
         return o;
       }});
     }}
 
-    // ===== UI =====
-    const root = d3.select("#{uid}");
-    root.html("");
+    const root = d3.select("#{uid}").html("");
+    const title = root.append("div").style("margin","0 0 6px 6px")
+      .style("font","600 16px/1.3 sans-serif").style("color","#e5e7eb");
+    root.append("div").style("margin","0 0 8px 6px")
+      .style("font","12px/1.35 sans-serif").style("color","#94a3b8")
+      .html("Arrastra el <b>NOMBRE</b> del eje para reordenar (las líneas se mueven mientras arrastras). Brush para filtrar. Click en una línea para (de)seleccionar. Exporta la selección a CSV.");
 
-    const title = root.append("div")
-      .style("margin","0 0 6px 6px")
-      .style("font","600 16px/1.3 sans-serif")
-      .style("color","#e5e7eb");
+    // controles
+    const ctrls = root.append("div").style("display","flex").style("gap","12px").style("align-items","center").style("margin","6px 0 8px 6px");
+    ctrls.append("span").style("color","#cbd5e1").style("font","12px sans-serif").text("Año:");
+    const slider = ctrls.append("input").attr("type","range").attr("min",0).attr("max",YEARS.length-1).attr("value",YEARS.indexOf({json.dumps(start_year)})).style("width","320px");
+    const yearLbl = ctrls.append("span").style("color","#e5e7eb").style("font","12px sans-serif").text({json.dumps(start_year)});
+    const btn = ctrls.append("button").text("Export selección CSV")
+      .style("font","12px sans-serif").style("padding","6px 10px").style("border","1px solid #475569").style("border-radius","8px").style("color","#e5e7eb").style("background","#1f2937");
 
-    root.append("div")
-      .style("margin","0 0 8px 6px")
-      .style("font","12px/1.35 sans-serif")
-      .style("color","#94a3b8")
-      .text("Paralelas por año: cada eje es una tecnología (MW). Una línea = país. Color = tecnología dominante. Izquierda: slider de año; Arrastra el nombre del eje para reordenarlo; usa brush para filtrar.");
-
-    // Controles
-    const controls = root.append("div").style("display","flex").style("gap","10px").style("align-items","center").style("margin","6px 0 8px 6px");
-    controls.append("span").style("color","#cbd5e1").style("font","12px sans-serif").text("Año:");
-    const slider = controls.append("input").attr("type","range")
-      .attr("min", 0).attr("max", YEARS.length-1)
-      .attr("value", YEARS.indexOf({json.dumps(start_year)}))
-      .style("width","320px");
-    const yearLabel = controls.append("span").style("color","#e5e7eb").style("font","12px sans-serif").text({json.dumps(start_year)});
-
-    const svg = root.append("svg").attr("width", W).attr("height", H);
-    const g = svg.append("g").attr("transform", `translate(${{m.left}},${{m.top}})`);
+    const svg = root.append("svg").attr("width",W).attr("height",H);
+    const g   = svg.append("g").attr("transform",`translate(${{m.left}},${{m.top}})`);
 
     let idxYear = YEARS.indexOf({json.dumps(start_year)});
-    let DATA = datasetFor(idxYear);
-    if (normalize) DATA = normalizeByDim(DATA);
-
+    let DATA = datasetFor(idxYear); if(normalize) DATA = normalizeByDim(DATA);
     title.text(`Capacidad instalada por país — ${{YEARS[idxYear]}}`);
 
-    // Escalas
-    const x = d3.scalePoint().domain(DIMS).range([0, iW]).padding(0.5);
+    const x = d3.scalePoint().domain(DIMS).range([0,iW]).padding(0.5);
     const y = {{}};
     function buildY(){{
-      for (const k of DIMS) {{
-        const vals = DATA.map(d => +d[k]).filter(v => Number.isFinite(v) && (!useLog || v>0));
-        y[k] = (useLog ? d3.scaleLog() : d3.scaleLinear())
-          .domain(useLog ? [Math.max(1e-6, d3.min(vals)), d3.max(vals)] : d3.extent(vals)).nice()
-          .range([iH, 0]);
+      for(const k of DIMS){{
+        const vals = DATA.map(d=>+d[k]).filter(v=>Number.isFinite(v) && (!useLog || v>0));
+        y[k] = (useLog? d3.scaleLog(): d3.scaleLinear())
+          .domain(useLog? [Math.max(1e-6,d3.min(vals)), d3.max(vals)] : d3.extent(vals)).nice()
+          .range([iH,0]);
       }}
     }}
     buildY();
 
-    const line = d3.line().defined(([,v]) => Number.isFinite(v));
-    const path = d => line(DIMS.map(k => [x(k), y[k](+d[k])]));
+    const dragging = {{}};
+    const position = d => (dragging[d] != null ? dragging[d] : x(d));
+    const line = d3.line().defined(([,v])=>Number.isFinite(v));
+    const pathFor = d => line(DIMS.map(k => [position(k), y[k](+d[k])]));
 
     // tooltip
     const tip = document.createElement('div');
-    Object.assign(tip.style, {{
-      position:'fixed', zIndex:9999, pointerEvents:'none',
-      background:'rgba(17,24,39,.95)', color:'#fff', padding:'10px 12px',
-      borderRadius:'10px', font:'12px/1.35 sans-serif',
-      boxShadow:'0 8px 24px rgba(0,0,0,.35)', opacity:0, transition:'opacity .12s'
-    }});
+    Object.assign(tip.style,{{position:'fixed',zIndex:9999,pointerEvents:'none',background:'rgba(17,24,39,.95)',color:'#fff',padding:'10px 12px',borderRadius:'10px',font:'12px/1.35 sans-serif',boxShadow:'0 8px 24px rgba(0,0,0,.35)',opacity:0,transition:'opacity .12s'}});
     document.body.appendChild(tip);
-    const fmt = d3.format(",.0f");
-    function tipHTML(d){{
-      return `<div style="font-weight:700;margin-bottom:6px">${{d.Country}}</div>` + 
-             DIMS.map(k => `<div>${{k}}: <strong>${{fmt(+d[k]||0)}}</strong>${{normalize?'':' MW'}}</div>`).join("");
-    }}
-    function showTip(ev,d){{ tip.innerHTML = tipHTML(d); tip.style.opacity=1; tip.style.left=(ev.clientX+14)+'px'; tip.style.top=(ev.clientY+14)+'px'; }}
-    function hideTip(){{ tip.style.opacity=0; }}
+    const fmt=d3.format(",.0f");
+    const tipHTML = d => `<div style="font-weight:700;margin-bottom:6px">${{d.Country}}</div>` + DIMS.map(k=>`<div>${{k}}: <strong>${{fmt(+d[k]||0)}}</strong>${{normalize?'':' MW'}}</div>`).join("");
+    const showTip=(ev,d)=>{{tip.innerHTML=tipHTML(d);tip.style.opacity=1;tip.style.left=(ev.clientX+14)+'px';tip.style.top=(ev.clientY+14)+'px';}};
+    const hideTip=()=>{{tip.style.opacity=0;}};
 
-    // capa de líneas
+    // selección y estilos
+    let selected = new Set();
+    function applySelectionStyles(){{
+      if(selected.size===0){{
+        vis.attr("stroke-opacity",.85).attr("stroke-width",1.2);
+      }} else {{
+        vis.attr("stroke-opacity", d=>selected.has(d.Country)?1:.08)
+           .attr("stroke-width",   d=>selected.has(d.Country)?2.6:.7);
+      }}
+      status.textContent = `Año: ${{YEARS[idxYear]}} · Seleccionados: ${{selected.size}} / ${{DATA.length}}`;
+    }}
+    function toggleSelect(_,d){{
+      if(selected.has(d.Country)) selected.delete(d.Country); else selected.add(d.Country);
+      applySelectionStyles();
+    }}
+
+    // capas de líneas: visible + hit (gruesa invisible para clicks)
     const layer = g.append("g").attr("fill","none");
-    let paths = layer.selectAll("path").data(DATA).join("path")
-      .attr("d", path)
-      .attr("stroke", d => color(d.DominantTech || "Solar"))
-      .attr("stroke-opacity", .85)
-      .attr("stroke-width", 1.2)
+    const hit   = g.append("g").attr("fill","none");
+    let vis = layer.selectAll("path").data(DATA, d=>d.Country).join("path")
+      .attr("d", pathFor).attr("stroke", d=>color(d.DominantTech||"Solar"))
+      .attr("stroke-opacity",.85).attr("stroke-width",1.2)
+      .style("pointer-events","none"); // recibe eventos el hit
+    let hits = hit.selectAll("path").data(DATA, d=>d.Country).join("path")
+      .attr("d", pathFor).attr("stroke","transparent").attr("stroke-width",12)
+      .style("cursor","pointer")
       .on("mousemove", showTip).on("mouseleave", hideTip)
-      .on("mouseover", function(){{ d3.select(this).attr("stroke-width",2); }})
-      .on("mouseout",  function(){{ d3.select(this).attr("stroke-width",1.2); }});
+      .on("click", toggleSelect);
 
-    // ejes
-    let axis = g.selectAll(".axis").data(DIMS, d=>d).join(
-      enter => {{
-        const a = enter.append("g").attr("class","axis").attr("transform", d => `translate(${{x(d)}},0)`);
-        a.each(function(d){{ d3.select(this).call(d3.axisLeft(y[d]).ticks(6, useLog ? "~g" : undefined)); }});
-        a.append("text").attr("class","axis-title").attr("y",-10).attr("text-anchor","middle")
-          .style("font","12px sans-serif").style("fill","#e5e7eb").text(d=>d);
-        return a;
-      }},
-      update => update,
-      exit => exit.remove()
-    );
+    // ejes, brushes y drag
+    let axis = null;
+    const bw = Math.min(36, Math.max(24, iW / DIMS.length * .5));
+    function renderAxes(){{
+      axis = g.selectAll(".axis").data(DIMS, d=>d).join(
+        enter=>{{ const a=enter.append("g").attr("class","axis"); a.append("text").attr("class","axis-title").attr("y",-10).attr("text-anchor","middle").style("font","12px sans-serif").style("fill","#e5e7eb"); return a; }},
+        update=>update, exit=>exit.remove()
+      );
+      axis.attr("transform", d => `translate(${{position(d)}},0)`)
+          .each(function(d){{ const A=d3.select(this); A.selectAll("g.tick").remove(); A.call(d3.axisLeft(y[d]).ticks(6, useLog ? "~g" : undefined)); A.select("text.axis-title").text(d=>d); }});
 
-    // brushes
-    const bw = Math.min(36, Math.max(24, iW / DIMS.length * 0.5));
-    function addBrushes(){{
       axis.selectAll(".brush").remove();
-      axis.append("g").attr("class","brush").attr("transform", `translate(${{-bw/2}},0)`)
-        .each(function(dim){{
-          d3.select(this).call(d3.brushY().extent([[0,0],[bw,iH]]).on("brush end", brushed));
-        }});
+      axis.append("g").attr("class","brush").attr("transform",`translate(${{-bw/2}},0)`)
+        .each(function(dim){{ d3.select(this).call(d3.brushY().extent([[0,0],[bw,iH]]).on("brush end", brushed)); }});
+
+      if(allowReorder){{
+        const drag = d3.drag()
+          .on("start",(ev,dim)=>{{ dragging[dim]=position(dim); g.selectAll(".brush").style("pointer-events","none"); }})
+          .on("drag",(ev,dim)=>{{
+            dragging[dim] = Math.max(0, Math.min(iW, ev.x));   // movimiento libre
+            axis.attr("transform", d => `translate(${{position(d)}},0)`);
+            // mover líneas en vivo
+            vis.attr("d", d => d3.line()(DIMS.map(k => [position(k), y[k](+d[k]) ])));
+            hits.attr("d", d => d3.line()(DIMS.map(k => [position(k), y[k](+d[k]) ])));
+          }})
+          .on("end",(ev,dim)=>{{
+            // fija el nuevo orden por posición
+            DIMS.sort((a,b)=> position(a)-position(b));
+            dragging[dim]=null; delete dragging[dim];
+            x.domain(DIMS);
+            axis.transition().duration(150).attr("transform", d => `translate(${{x(d)}},0)`);
+            vis.transition().duration(150).attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k]) ])));
+            hits.transition().duration(150).attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k]) ])));
+            g.selectAll(".brush").style("pointer-events",null);
+          }});
+        axis.select("text.axis-title").style("cursor","grab").call(drag);
+      }}
     }}
+
     const filters = {{}};
     function brushed(){{
       g.selectAll(".brush").each(function(dim){{
-        const s = d3.brushSelection(this);
-        if (s) {{
-          const y0 = y[dim].invert(s[1]); const y1 = y[dim].invert(s[0]);
-          filters[dim] = [Math.min(y0,y1), Math.max(y0,y1)];
-        }} else delete filters[dim];
+        const s=d3.brushSelection(this);
+        if(s){{ const y0=y[dim].invert(s[1]); const y1=y[dim].invert(s[0]); filters[dim]=[Math.min(y0,y1),Math.max(y0,y1)]; }}
+        else delete filters[dim];
       }});
-      const keys = Object.keys(filters);
-      paths.style("display", d => {{
+      const keys=Object.keys(filters);
+      const disp = d => {{
         for(const k of keys){{ const v=+d[k]||0; const [a,b]=filters[k]; if(v<a||v>b) return "none"; }}
         return null;
-      }});
-      const visible = paths.filter(function(){{return d3.select(this).style("display")!=="none"}}).size();
-      status.textContent = `Año: ${{YEARS[idxYear]}} · Filtrado: ${{visible}} / ${{DATA.length}} países.`;
-    }}
-    addBrushes();
-
-    // drag reorder en títulos
-    if (allowReorder){{
-      const dragging = {{}};
-      function position(d) {{ return dragging[d] ?? x(d); }}
-      const drag = d3.drag()
-        .on("start",(ev,dim)=>{{ dragging[dim]=x(dim); }})
-        .on("drag",(ev,dim)=>{{
-          dragging[dim]=Math.max(0,Math.min(iW,ev.x));
-          DIMS.sort((a,b)=>position(a)-position(b));
-          x.domain(DIMS);
-          axis.order().attr("transform", d => `translate(${{position(d)}},0)`);
-          paths.attr("d", d => d3.line()(DIMS.map(k => [position(k), y[k](+d[k])])));
-        }})
-        .on("end",(ev,dim)=>{{ delete dragging[dim]; axis.transition().duration(200).attr("transform", d => `translate(${{x(d)}},0)`); paths.transition().duration(200).attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k])]))) }});
-      axis.select("text.axis-title").style("cursor","grab").call(drag);
+      }};
+      vis.style("display", disp); hits.style("display", disp);
+      const visible = vis.filter(function(){{return d3.select(this).style("display")!=="none"}}).size();
+      status.textContent = `Año: ${{YEARS[idxYear]}} · Filtrado: ${{visible}} / ${{DATA.length}} · Seleccionados: ${{selected.size}}`;
     }}
 
-    // leyenda clicable
-    const cats = ["Fossil","Hydro","Wind","Solar","Bio"];
-    let active = new Set(cats);
-    const lg = svg.append("g").attr("transform", `translate(${{W - m.right + 16}},${{m.top}})`);
-    lg.append("text").text("Dominant").style("font","12px sans-serif").attr("fill","#e5e7eb");
-    const row = lg.append("g").attr("transform","translate(0,16)").selectAll("g").data(cats).join("g")
-      .attr("cursor","pointer").attr("transform",(d,i)=>`translate(0,${{i*22}})`)
-      .on("click",(ev,cat)=>{{
-        if(active.has(cat)) active.delete(cat); else active.add(cat);
-        row.selectAll("rect").attr("opacity", d => active.has(d)?1:0.25);
-        row.selectAll("text").attr("opacity", d => active.has(d)?1:0.35);
-        paths.attr("stroke-opacity", d => active.has(d.DominantTech)? .85 : .06);
-      }});
-    row.append("rect").attr("width",12).attr("height",12).attr("rx",2).attr("fill", d=>color(d));
-    row.append("text").attr("x",16).attr("y",6).attr("dy",".35em").style("font","12px sans-serif").attr("fill","#e5e7eb").text(d=>d);
+    renderAxes(); applySelectionStyles();
 
-    // ===== actualización por año =====
     function updateYear(newIdx){{
-      idxYear = newIdx;
-      yearLabel.text(YEARS[idxYear]);
+      idxYear=newIdx; yearLbl.text(YEARS[idxYear]);
       title.text(`Capacidad instalada por país — ${{YEARS[idxYear]}}`);
-      DATA = datasetFor(idxYear);
-      if (normalize) DATA = normalizeByDim(DATA);
-
-      // y & ejes
-      buildY();
-      axis.each(function(d){{ d3.select(this).call(d3.axisLeft(y[d]).ticks(6, useLog ? "~g" : undefined)); }});
-
-      // limpiar filtros y brushes (para evitar rangos inválidos)
-      Object.keys(filters).forEach(k=>delete filters[k]);
-      addBrushes();
-
-      // paths
-      paths = layer.selectAll("path").data(DATA, d => d.Country).join("path")
-        .attr("stroke", d => color(d.DominantTech || "Solar"))
-        .attr("stroke-opacity", .85)
-        .attr("fill","none")
-        .attr("stroke-width", 1.2)
-        .on("mousemove", showTip).on("mouseleave", hideTip)
-        .on("mouseover", function(){{ d3.select(this).attr("stroke-width",2); }})
-        .on("mouseout",  function(){{ d3.select(this).attr("stroke-width",1.2); }})
-        .transition().duration(250)
-        .attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k])])));
-      status.textContent = `Año: ${{YEARS[idxYear]}} · Filtrado: ${{DATA.length}} / ${{DATA.length}} países.`;
+      DATA=datasetFor(idxYear); if(normalize) DATA=normalizeByDim(DATA);
+      buildY(); renderAxes();
+      vis = layer.selectAll("path").data(DATA, d=>d.Country).join("path")
+        .attr("stroke", d=>color(d.DominantTech||"Solar"))
+        .attr("fill","none").attr("stroke-opacity",.85).style("pointer-events","none")
+        .attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k]) ])));
+      hits = hit.selectAll("path").data(DATA, d=>d.Country).join("path")
+        .attr("stroke","transparent").attr("stroke-width",12).style("cursor","pointer")
+        .on("mousemove", showTip).on("mouseleave", hideTip).on("click", toggleSelect)
+        .attr("d", d => d3.line()(DIMS.map(k => [x(k), y[k](+d[k]) ])));
+      applySelectionStyles();
+      Object.keys(filters).forEach(k=>delete filters[k]); // limpia brushes
     }}
 
-    slider.on("input", (ev)=> updateYear(+ev.target.value));
+    slider.on("input",(ev)=> updateYear(+ev.target.value));
+
+    // Export CSV de la selección (o todo si no hay selección)
+    btn.on("click", () => {{
+      const rows = (selected.size? DATA.filter(d=>selected.has(d.Country)) : DATA);
+      const header = ["Country", ...DIMS].join(",");
+      const body = rows.map(r => [r.Country, ...DIMS.map(k => (+r[k]||0))].join(",")).join("\\n");
+      const csv = header + "\\n" + body;
+      const blob = new Blob([csv], {{type:"text/csv;charset=utf-8;"}});
+      const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+      a.download = `parallel_selection_${{YEARS[idxYear]}}.csv`; a.click();
+      URL.revokeObjectURL(a.href);
+    }});
+
     // arranque
     updateYear(idxYear);
 
@@ -538,7 +484,7 @@ def ParallelEnergy(
 }})();
 """
     display(Javascript(js))
-    return HTML(f"<small>ParallelEnergyByYear listo (#{uid})</small>")
+    return HTML(f"<small>ParallelEnergy listo (#{uid})</small>")
 
 ####
 def BeeSwarmCapacity(df, year_col, tech_col="Technology_std", country_col="Country",
