@@ -1,3 +1,4 @@
+
 // Isea/assets/parallel.js
 // anywidget ESM module
 export function render({ model, el }) {
