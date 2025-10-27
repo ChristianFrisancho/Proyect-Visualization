@@ -11,7 +11,7 @@ from .graphs import (
     BeeSwarmCapacity,
     # ParallelEnergy,     # <- QUITAR/COMENTAR para evitar duplicado
     #RadialStackedBar,
-    WorldRenewable,
+    #WorldRenewable,
     BubblePack,
 )
 from .layouts import LinkedEnergyDashboard
@@ -30,4 +30,8 @@ __all__ = [
     "WorldRenewable",
     "BubblePack",
     "LinkedEnergyDashboard",
+    "WorldRenewable",
 ]
+
+# Added by Alex
+from .world_renewable import WorldRenewable
