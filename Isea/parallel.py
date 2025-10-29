@@ -113,14 +113,22 @@ class ParallelEnergy(anywidget.AnyWidget):
         self.selection = {}
 
     # ------------ helpers PY ------------
-    def selection_df(self) -> pd.DataFrame:
+# --- helpers Python-side ---
+    def selection_df(self):
+        """Devuelve la selección actual como DataFrame (puede estar vacío)."""
+        import pandas as pd
         return pd.DataFrame(self.selection.get("rows", []))
 
-    def show_selection(self, head: Optional[int] = None) -> pd.DataFrame:
+    def show_selection(self, head=None, *, return_df=False):
+        """Muestra la selección en la celda (opcional head=N).
+        Si return_df=True, además retorna el DataFrame (por defecto NO retorna nada)."""
         from IPython.display import display
         df = self.selection_df()
-        display(df.head(head) if head is not None else df)
-        return df
+        if head is not None:
+            df = df.head(head)
+        display(df)
+        return df if return_df else None
+
 
     def new_from_selection(self, **overrides):
 

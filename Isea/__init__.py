@@ -18,6 +18,8 @@ from .layouts import LinkedEnergyDashboard
 
 # Added by Milan
 from .scatter import ScatterBrush
+from .energy_quad import EnergyQuad
+
 
 __all__ = [
     "__version__",
@@ -31,6 +33,7 @@ __all__ = [
     "BubblePack",
     "LinkedEnergyDashboard",
     "WorldRenewable",
+    "EnergyQuad",
 ]
 
 # Added by Alex
