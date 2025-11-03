@@ -1,14 +1,58 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "Isea"
-version = "0.2.0"
-description = "Isea: D3-powered visualizations for Python"
-readme = "README.md"
+name = "isea-vis"                                  # cámbialo a "isea" si está libre
+version = "0.1.0"
+description = "D3/anywidget visuals: ParallelEnergy + ScatterBrush for Jupyter/Colab"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
-dependencies = ["anywidget>=0.9", "traitlets>=5.9", "pandas>=1.5", "numpy>=1.21", "ipywidgets>=7.0"]
 
+license = { file = "LICENSE" }
+
+authors = [
+  { name = "Christian Frisancho", email = "tuemail@ejemplo.com" }
+]
+
+keywords = ["d3", "visualization", "jupyter", "anywidget", "parallel-coordinates"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Framework :: Jupyter",
+  "Framework :: Jupyter :: JupyterLab",
+  "Topic :: Scientific/Engineering :: Visualization"
+]
+
+dependencies = [
+  "anywidget>=0.9",
+  "traitlets>=5.9",
+  "pandas>=1.5",
+  "ipython>=8.0"
+]
+
+[project.urls]
+Homepage   = "https://github.com/ChristianFrisancho/Proyect-Visualization"
+Repository = "https://github.com/ChristianFrisancho/Proyect-Visualization"
+Issues     = "https://github.com/ChristianFrisancho/Proyect-Visualization/issues"
+
+# ---- Build config (Hatchling) ----
 [tool.hatch.build]
-include = ["Isea/**", "README.md","Isea/assets/**" ]
+include = [
+  "Isea/**",
+  "README.md",
+  "LICENSE"
+]
+exclude = [
+  ".github/**",
+  ".ipynb_checkpoints/**",
+  "venv/**",
+  "dist/**",
+  "build/**"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["Isea"]
+
+[tool.hatch.build.targets.sdist]
+include = ["Isea/**", "README.md", "LICENSE"]
