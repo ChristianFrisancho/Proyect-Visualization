@@ -93,6 +93,104 @@ export async function render({ model, el }) {
     const gTitle = svg.append("g");
     const gLegend= svg.append("g");   // legend is OUTSIDE the plot
     const gPanel = svg.append("g");
+    
+    //todo for zoom ===== Reset-zoom overlay button (always visible) =====
+    // --- Clip everything to the plot area so nothing draws outside
+    const clipId = `clip-${Math.random().toString(36).slice(2)}`;
+    svg.append("defs")
+      .append("clipPath")
+      .attr("id", clipId)
+      .append("rect")
+      .attr("x", 0)
+      .attr("y", 0)
+      .attr("width", plotW)
+      .attr("height", plotH);
+
+    // Apply to layers that should not overflow
+    gDots.attr("clip-path", `url(#${clipId})`);
+    gBrush.attr("clip-path", `url(#${clipId})`);
+    gGrid.attr("clip-path", `url(#${clipId})`); // optional, keeps grid lines crisp at edges
+
+    wrap.style.position = "relative"; // anchor for absolute children
+
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "Reset zoom";
+    resetBtn.title = "Reset zoom";
+    Object.assign(resetBtn.style, {
+      position: "absolute",
+      top: Math.max(4, m.t - 28) + "px",
+      left: (m.l + plotW - 96) + "px", // nudge to the right edge of the plot
+      padding: "4px 8px",
+      font: "12px/1.2 sans-serif",
+      borderRadius: "8px",
+      border: "1px solid #D1D5DB",
+      background: "#FFFFFF",
+      color: "#111827",
+      cursor: "pointer",
+      boxShadow: "0 1px 2px rgba(0,0,0,.06)"
+    });
+    wrap.appendChild(resetBtn);
+
+    resetBtn.addEventListener("click", () => {
+      updateScalesAndAxes(0.05);
+      repositionPoints();
+      try { gBrush.call(brush.move, null); } catch(e) {}
+    });
+
+
+    //todo ===== Reset-zoom overlay button end =====
+
+    // ---- Interaction mode + tool buttons (top-right inside the plot)
+    let interactionMode = "select"; // "select" | "zoom"
+    const gTools = gPlot.append("g").attr("class", "tools");
+    // prevent the brush from starting when clicking these buttons
+    gTools.on("mousedown", (e) => e.stopPropagation());
+
+    function renderToolButtons() {
+      gTools.selectAll("*").remove();
+
+      const PAD = 8;
+      const btnW = 28, btnH = 24, gap = 6;
+      const totalW = btnW * 2 + gap;
+      const x0 = plotW - totalW - PAD;
+      const y0 = PAD;
+
+      const buttons = [
+        { id: "select", x: x0,          icon: "cursor", title: "Selection mode" },
+        { id: "zoom",   x: x0 + btnW + gap, icon: "zoom",   title: "Zoom mode" }
+      ];
+
+      const gB = gTools.selectAll("g.btn").data(buttons).join("g")
+        .attr("class", "btn")
+        .attr("transform", d => `translate(${d.x},${y0})`)
+        .style("cursor","pointer")
+        .on("mousedown", (e)=> e.stopPropagation())
+        .on("click", (_, d) => { interactionMode = d.id; renderToolButtons(); });
+
+      gB.append("rect")
+        .attr("rx", 6).attr("ry", 6)
+        .attr("width", btnW).attr("height", btnH)
+        .attr("fill", d => interactionMode === d.id ? "#111827" : "#F3F4F6")
+        .attr("stroke", d => interactionMode === d.id ? "#111827" : "#E5E7EB");
+
+      // icons
+      gB.each(function(d){
+        const g = d3.select(this).append("g")
+          .attr("transform", `translate(${btnW/2},${btnH/2})`)
+          .attr("fill", interactionMode === d.id ? "#FFFFFF" : "#111827")
+          .attr("stroke","none");
+
+        if (d.icon === "cursor") {
+          g.append("path").attr("d","M-5,-8 L5,6 L0,5 L1,11 L-2,11 L-3,5 L-8,6 Z");
+        } else {
+          g.append("circle").attr("r", 5.5);
+          g.append("rect").attr("x", 4.5).attr("y", 4.5).attr("width", 6).attr("height", 2).attr("transform", "rotate(45)");
+        }
+        d3.select(this).append("title").text(d.title);
+      });
+    }
+
+    //todo above is new for zoom
 
     if (o.title) {
       gTitle.append("text")
@@ -154,9 +252,15 @@ export async function render({ model, el }) {
     const YV = data.map(d=>+d[o.y]).filter(Number.isFinite);
 
     const sx = (o.logX ? d3.scaleLog() : d3.scaleLinear())
-      .domain([d3.min(XV), d3.max(XV)]).range([0, plotW]).nice();
+      .domain([d3.min(XV), d3.max(XV)])
+      .range([0, plotW])
+      .nice();
+
     const sy = (o.logY ? d3.scaleLog() : d3.scaleLinear())
-      .domain([d3.min(YV), d3.max(YV)]).range([plotH, 0]).nice();
+      .domain([d3.min(YV), d3.max(YV)])
+      .range([plotH, 0])
+      .nice();
+
 
     if (o.squareCells) {
       const toT = (log) => log ? (v) => Math.log(v) : (v) => v;
@@ -200,15 +304,6 @@ export async function render({ model, el }) {
     const axX = d3.axisBottom(sx).ticks(o.xTicks || 8);
     const axY = d3.axisLeft(sy).ticks(o.yTicks || 8);
 
-    // if (o.grid) {
-    //   gGrid.selectAll("line.v").data(sx.ticks(o.xTicks || 8)).join("line")
-    //     .attr("x1", d => sx(d)).attr("x2", d => sx(d))
-    //     .attr("y1", 0).attr("y2", plotH).attr("stroke", "#e5e7eb");
-    //   gGrid.selectAll("line.h").data(sy.ticks(o.yTicks || 8)).join("line")
-    //     .attr("x1", 0).attr("x2", plotW)
-    //     .attr("y1", d => sy(d)).attr("y2", d => sy(d)).attr("stroke", "#e5e7eb");
-    // }
-
     gx.call(axX)
       .call(g=>g.selectAll(".x-label").data([0]).join("text")
         .attr("class","x-label").attr("x",plotW).attr("y",36).attr("text-anchor","end")
@@ -219,6 +314,68 @@ export async function render({ model, el }) {
         .attr("class","y-label").attr("x",0).attr("y",-12).attr("text-anchor","start")
         .attr("fill","#111827").attr("font-family","system-ui,Segoe UI,Arial").attr("font-size",12)
         .text(o.yLabel ?? String(o.y)));
+
+    
+    //todo to fix zoom ===== Hoisted helpers (available to brush, controls, etc.) =====
+    function updateGrid() {
+      if (!o.grid) return;
+      gGrid.selectAll("line.v").data(sx.ticks(o.xTicks || 8)).join(
+        enter => enter.append("line").attr("class","v")
+          .attr("y1", 0).attr("y2", plotH).attr("stroke", "#e5e7eb")
+          .attr("x1", d => sx(d)).attr("x2", d => sx(d)),
+        update => update
+          .attr("x1", d => sx(d)).attr("x2", d => sx(d))
+          .attr("y1", 0).attr("y2", plotH),
+        exit => exit.remove()
+      );
+      gGrid.selectAll("line.h").data(sy.ticks(o.yTicks || 8)).join(
+        enter => enter.append("line").attr("class","h")
+          .attr("x1", 0).attr("x2", plotW).attr("stroke", "#e5e7eb")
+          .attr("y1", d => sy(d)).attr("y2", d => sy(d)),
+        update => update
+          .attr("x1", 0).attr("x2", plotW)
+          .attr("y1", d => sy(d)).attr("y2", d => sy(d)),
+        exit => exit.remove()
+      );
+    }
+
+
+    //todo fixing padding padMax = 0 for no padding (e.g. while zoomed); use 0.05 for +5% on the MAX side only
+    function updateScalesAndAxes(padMax = 0) {
+      const XV2 = data.map(d => +d[o.x]).filter(Number.isFinite);
+      const YV2 = data.map(d => +d[o.y]).filter(Number.isFinite);
+
+      let xMin = d3.min(XV2), xMax = d3.max(XV2);
+      let yMin = d3.min(YV2), yMax = d3.max(YV2);
+
+      if (padMax > 0 && Number.isFinite(xMin) && Number.isFinite(xMax) && xMax > xMin) {
+        const dx = xMax - xMin;
+        xMax = xMax + padMax * dx;      // pad on right only
+      }
+      if (padMax > 0 && Number.isFinite(yMin) && Number.isFinite(yMax) && yMax > yMin) {
+        const dy = yMax - yMin;
+        yMax = yMax + padMax * dy;      // pad on top only
+      }
+
+      sx.domain([xMin, xMax]).nice();
+      sy.domain([yMin, yMax]).nice();
+
+      gx.call(d3.axisBottom(sx).ticks(o.xTicks || 8));
+      gx.select(".x-label").text(o.xLabel ?? String(o.x));
+      gy.call(d3.axisLeft(sy).ticks(o.yTicks || 8));
+      gy.select(".y-label").text(o.yLabel ?? String(o.y));
+
+      updateGrid();
+    }
+    
+
+    function repositionPoints() {
+      gDots.selectAll("circle")
+        .attr("cx", d => sx(+d[o.x]))
+        .attr("cy", d => sy(+d[o.y]))
+        .attr("display", d => (+d[o.x] === 0 && +d[o.y] === 0) ? "none" : null);
+    }
+    //todo ===== Hoisted helpers end =====
 
     // ---- Color
     let cmap = o.colorMap || null, cats=[];
@@ -314,59 +471,17 @@ export async function render({ model, el }) {
         });
         return b;
       }
-
-      // helpers to update axes/grid/points
-      function updateGrid() {
-        if (!o.grid) return;
-        gGrid.selectAll("line.v").data(sx.ticks(o.xTicks || 8)).join(
-          enter => enter.append("line").attr("class","v")
-            .attr("y1", 0).attr("y2", plotH).attr("stroke", "#e5e7eb")
-            .attr("x1", d => sx(d)).attr("x2", d => sx(d)),
-          update => update
-            .attr("x1", d => sx(d)).attr("x2", d => sx(d))
-            .attr("y1", 0).attr("y2", plotH),
-          exit => exit.remove()
-        );
-        gGrid.selectAll("line.h").data(sy.ticks(o.yTicks || 8)).join(
-          enter => enter.append("line").attr("class","h")
-            .attr("x1", 0).attr("x2", plotW).attr("stroke", "#e5e7eb")
-            .attr("y1", d => sy(d)).attr("y2", d => sy(d)),
-          update => update
-            .attr("x1", 0).attr("x2", plotW)
-            .attr("y1", d => sy(d)).attr("y2", d => sy(d)),
-          exit => exit.remove()
-        );
-      }
-
-      function updateScalesAndAxes() {
-        const XV2 = data.map(d=>+d[o.x]).filter(Number.isFinite);
-        const YV2 = data.map(d=>+d[o.y]).filter(Number.isFinite);
-        sx.domain([d3.min(XV2), d3.max(XV2)]).nice();
-        sy.domain([d3.min(YV2), d3.max(YV2)]).nice();
-
-        gx.call(d3.axisBottom(sx).ticks(o.xTicks || 8));
-        gx.select(".x-label").text(o.xLabel ?? String(o.x));
-        gy.call(d3.axisLeft(sy).ticks(o.yTicks || 8));
-        gy.select(".y-label").text(o.yLabel ?? String(o.y));
-
-        updateGrid();
-      }
-
-      function repositionPoints() {
-        gDots.selectAll("circle")
-          .transition().duration(220)
-          .attr("cx", d => sx(+d[o.x]))
-          .attr("cy", d => sy(+d[o.y]))
-          .attr("display", d => (+d[o.x] === 0 && +d[o.y] === 0) ? "none" : null);
-      }
       
       // Initial render --
-      updateScalesAndAxes();
+      updateScalesAndAxes(0.05);
       repositionPoints();
+      renderToolButtons();
       // -- Initial render
+      
 
-      function setX(v) { if (v !== o.x) { o.x = v; updateScalesAndAxes(); repositionPoints(); renderButtons(); } }
-      function setY(v) { if (v !== o.y) { o.y = v; updateScalesAndAxes(); repositionPoints(); renderButtons(); } }
+      function setX(v) { if (v !== o.x) { o.x = v; updateScalesAndAxes(0.05); repositionPoints(); renderButtons(); renderToolButtons(); } }
+      function setY(v) { if (v !== o.y) { o.y = v; updateScalesAndAxes(0.05); repositionPoints(); renderButtons(); renderToolButtons(); } }
+
 
       function renderButtons() {
         xBtns.innerHTML = ""; yBtns.innerHTML = "";
@@ -440,7 +555,7 @@ export async function render({ model, el }) {
           if (/^F\d{4}$/.test(o.y)) o.y = col;
 
           if (typeof renderButtons === "function") renderButtons();
-          updateScalesAndAxes();
+          updateScalesAndAxes(0.05);
           repositionPoints();
         });
       }
@@ -456,19 +571,95 @@ export async function render({ model, el }) {
       model.save_changes(); updatePanel(); applySelectionStyles();
     };
 
-    // ---- Brush under points
-    const brush = d3.brush().extent([[0,0],[plotW,plotH]]).on("end", brushed);
+    //! trying to fix brush and zoom
+    // ---- Brush over points, tools above brush (so drag always starts)
+    const brush = d3.brush()
+      .extent([[0, 0], [plotW, plotH]])
+      .on("start", brushed)  // we’ll detect tiny drags vs real drags
+      .on("end", brushed);
     gBrush.call(brush);
-    gBrush.lower();   // brush under everything
-    gDots.raise();    // dots above to receive pointer events
 
-    function brushed({selection}){
-      if (!selection){ selectedKeys.clear(); pushSelectionFromKeys("set"); return; }
-      const [[x0,y0],[x1,y1]] = selection;
+    // Draw order: grid/axes -> points -> brush -> tool buttons
+    gDots.raise();   // points above grid
+    gBrush.raise();  // brush overlay ABOVE points (drag works anywhere)
+    gTools.raise();  // tool icons on top so they stay clickable
+
+    function brushed({ selection, sourceEvent }) {
+      // If we clicked a tool button, ignore.
+      if (sourceEvent && gTools.node() && gTools.node().contains(sourceEvent.target)) return;
+
+      // ZOOM mode unchanged
+      if (interactionMode === "zoom") {
+        if (!selection) return;
+        const [[x0, y0], [x1, y1]] = selection;
+
+        const xMin = sx.invert(Math.min(x0, x1));
+        const xMax = sx.invert(Math.max(x0, x1));
+        const yMin = sy.invert(Math.max(y0, y1)); // invert y
+        const yMax = sy.invert(Math.min(y0, y1));
+
+        if (Number.isFinite(xMin) && Number.isFinite(xMax) && xMax > xMin &&
+            Number.isFinite(yMin) && Number.isFinite(yMax) && yMax > yMin) {
+          sx.domain([xMin, xMax]).nice();
+          sy.domain([yMin, yMax]).nice();
+
+          gx.call(d3.axisBottom(sx).ticks(o.xTicks || 8));
+          gx.select(".x-label").text(o.xLabel ?? String(o.x));
+          gy.call(d3.axisLeft(sy).ticks(o.yTicks || 8));
+          gy.select(".y-label").text(o.yLabel ?? String(o.y));
+
+          updateGrid?.();
+          repositionPoints?.();
+          renderToolButtons?.();
+        }
+
+        gBrush.call(brush.move, null);
+        return;
+      }
+
+      // SELECT mode
+      // If no selection (e.g., click released outside), do nothing.
+      if (!selection) return;
+
+      const [[x0, y0], [x1, y1]] = selection;
+      const w = Math.abs(x1 - x0);
+      const h = Math.abs(y1 - y0);
+
+      // Treat very small brush as a "click" to toggle nearest point
+      const CLICK_EPS = 4; // px threshold
+      if (w <= CLICK_EPS && h <= CLICK_EPS) {
+        const [mx, my] = sourceEvent ? d3.pointer(sourceEvent, gPlot.node()) : [(x0 + x1) / 2, (y0 + y1) / 2];
+        let best = null, bestD2 = 64; // 8px radius squared
+        points.each(function(d){
+          const dx = sx(+d[o.x]) - mx;
+          const dy = sy(+d[o.y]) - my;
+          const d2 = dx*dx + dy*dy;
+          if (d2 < bestD2) { bestD2 = d2; best = d; }
+        });
+        if (best) {
+          const k = keyOf(best);
+          if (selectedKeys.has(k)) selectedKeys.delete(k); else selectedKeys.add(k);
+          pushSelectionFromKeys("set");
+        }
+        gBrush.call(brush.move, null);
+        return;
+      }
+
+      // Otherwise: rectangle selection
       selectedKeys.clear();
-      points.each(function(d){ const x=sx(+d[o.x]), y=sy(+d[o.y]); if (x>=x0 && x<=x1 && y>=y0 && y<=y1) selectedKeys.add(keyOf(d)); });
+      points.each(function(d){
+        const x = sx(+d[o.x]), y = sy(+d[o.y]);
+        if (x >= Math.min(x0, x1) && x <= Math.max(x0, x1) &&
+            y >= Math.min(y0, y1) && y <= Math.max(y0, y1)) {
+          selectedKeys.add(keyOf(d));
+        }
+      });
       pushSelectionFromKeys("set");
+      gBrush.call(brush.move, null);
     }
+
+
+    //! end of trying to fix brush and zoom
 
     function applySelectionStyles(){
       if (!selectedKeys.size){ points.attr("fill-opacity",A); return; }
