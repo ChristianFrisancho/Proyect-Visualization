@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Energy Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <div class="left">
+      <h1>🌍 Energy Dashboard</h1>
+      <div class="controls">
+        <label for="yearRange">Year:</label>
+        <input id="yearRange" type="range" min="2000" max="2023" value="2023" />
+        <span id="yearLabel">2023</span>
+        <button id="playPause">▶️</button>
+      </div>
+    </div>
+    <div class="right">
+      <button id="theme-toggle">Toggle Theme</button>
+    </div>
+  </header>
+
+  <div id="helpPanel">
+    <strong>Cómo usar</strong> —
+    <ol>
+      <li>Mueve el slider <em>Year</em> (o presiona ▶️) para cambiar el año.</li>
+      <li>Hover una burbuja → tooltip (Toggle Select / Details).</li>
+      <li>Toggle Select acumula países; el panel mostrará la agregación de todos los seleccionados.</li>
+      <li>Click en cualquier slice del donut filtra/highlights los países que usan ese tipo.</li>
+    </ol>
+  </div>
+
+  <main>
+    <section id="leftCol">
+      <div id="bubble-map" class="viz"></div>
+    </section>
+    <section id="rightCol">
+      <div id="sunburst" class="viz"></div>
+      <div id="countryPanel" class="viz" style="display:none; margin-top:12px;"></div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip"></div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson@3"></script>
+
+  <script src="{{ url_for('static', filename='components/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='components/bubble_map.js') }}"></script>
+  <script src="{{ url_for('static', filename='components/sunburst.js') }}"></script>
+  <script src="{{ url_for('static', filename='components/country_panel.js') }}"></script>
+  <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
