@@ -1,16 +1,53 @@
+import os, io
 from flask import Flask, render_template, jsonify, request, send_file
 import pandas as pd
-import os, io
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, '..', 'Energy_clean.csv')
 
-def load_df():
-    df = pd.read_csv(DATA_PATH)
-    year_cols = [c for c in df.columns if c.startswith('F')]
-    df[year_cols] = df[year_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-    return df, year_cols
+_CACHE = {"mtime": None, "df": None, "year_cols": None, "years": None}
+
+def _load_df_cached():
+    mtime = os.path.getmtime(DATA_PATH)
+    if _CACHE["df"] is None or _CACHE["mtime"] != mtime:
+        df = pd.read_csv(DATA_PATH)
+        year_cols = [c for c in df.columns if c.startswith('F')]
+        df[year_cols] = df[year_cols].apply(pd.to_numeric, errors='coerce').fillna(0.0)
+        for col in ["Country","ISO3","Energy_Type","Technology"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str)
+        years = sorted(int(c[1:]) for c in year_cols if c[1:].isdigit())
+        _CACHE.update({"mtime": mtime, "df": df, "year_cols": year_cols, "years": years})
+    return _CACHE["df"], _CACHE["year_cols"], _CACHE["years"]
+
+def _parse_year_param(raw):
+    if not raw: return None
+    _, year_cols, _ = _load_df_cached()
+    s = str(raw).strip()
+    if s.startswith('F'):  return s if s in year_cols else None
+    if s.isdigit():        return f'F{s}' if f'F{s}' in year_cols else None
+    return None
+
+def _attach_energy_value(df, year_col):
+    df = df.copy()
+    if year_col:
+        df["Energy_Value"] = df[year_col].astype(float)
+    else:
+        _, year_cols, _ = _load_df_cached()
+        df["Energy_Value"] = df[year_cols].sum(axis=1).astype(float)
+    return df
+
+def _apply_filters(df, energy_type=None, technology=None, isos=None):
+    if energy_type:
+        df = df[df["Energy_Type"].str.contains(energy_type, case=False, na=False)]
+    if technology:
+        df = df[df["Technology"].str.contains(technology, case=False, na=False)]
+    if isos:
+        iso_set = {s.strip().upper() for s in isos if s and s.strip()}
+        if iso_set:
+            df = df[df["ISO3"].str.upper().isin(iso_set)]
+    return df
 
 @app.route('/')
 def index():
@@ -18,126 +55,82 @@ def index():
 
 @app.route('/api/years')
 def api_years():
-    df, years = load_df()
-    return jsonify({'years': [int(y[1:]) for y in years]})
+    _, _, years = _load_df_cached()
+    return jsonify({"years": years})
 
 @app.route('/api/data')
 def api_data():
-    df, year_cols = load_df()
-    year = request.args.get('year', 'Total')
-    tech = request.args.get('technology', None)
-
-    if tech:
-        df = df[df['Technology'].astype(str).str.contains(tech, case=False, na=False)]
-
-    if year == 'Total':
-        df['Energy_Value'] = df[year_cols].sum(axis=1)
-    else:
-        if year not in year_cols:
-            return jsonify([])
-        df['Energy_Value'] = df[year].astype(float)
-
-    grouped = df.groupby(['Country','ISO3'], as_index=False)['Energy_Value'].sum()
+    df, _, _ = _load_df_cached()
+    year = _parse_year_param(request.args.get('year'))
+    energy_type = request.args.get('energy_type')
+    technology = request.args.get('technology')
+    df = _apply_filters(df, energy_type=energy_type, technology=technology)
+    df = _attach_energy_value(df, year)
+    if df.empty: return jsonify([])
+    grouped = (df.groupby(['Country','ISO3','Energy_Type','Technology'], as_index=False)
+                 ['Energy_Value'].sum())
     grouped['Energy_Value'] = grouped['Energy_Value'].astype(float)
-    grouped['count_rows'] = df.groupby(['Country','ISO3']).size().reindex(grouped.set_index(['Country','ISO3']).index).values
     return jsonify(grouped.to_dict(orient='records'))
 
-@app.route('/api/hierarchy')
-def api_hierarchy():
-    df, year_cols = load_df()
-    year = request.args.get('year', 'Total')
-    country = request.args.get('country', None)
-    tech_filter = request.args.get('tech_filter', None)
+@app.route('/api/aggregated')
+def api_aggregated():
+    df, _, _ = _load_df_cached()
+    year = _parse_year_param(request.args.get('year'))
+    isos_param = request.args.get('isos')
+    isos = [s for s in isos_param.split(',')] if isos_param else None
 
-    if country:
-        df = df[df['ISO3'].astype(str).str.upper() == country.upper()]
-    if tech_filter:
-        df = df[df['Technology'].astype(str).str.contains(tech_filter, case=False, na=False)]
+    df = _apply_filters(df, isos=isos)
+    df = _attach_energy_value(df, year)
+    if df.empty:
+        return jsonify({"total": 0.0, "breakdown": [], "tech_breakdown": [], "pairs": []})
 
-    if year == 'Total':
-        df['Energy_Value'] = df[year_cols].sum(axis=1)
-    else:
-        if year not in year_cols:
-            return jsonify([])
-        df['Energy_Value'] = df[year].astype(float)
+    total = float(df['Energy_Value'].sum())
 
-    agg = df.groupby(['Energy_Type','Technology'], as_index=False)['Energy_Value'].sum()
-    agg['Energy_Value'] = agg['Energy_Value'].astype(float)
-    return jsonify(agg.to_dict(orient='records'))
+    br = (df.groupby('Energy_Type', as_index=False)['Energy_Value'].sum())
+    br['pct'] = (br['Energy_Value'] / (total if total>0 else 1) * 100).round(2)
+    br = br.sort_values('Energy_Value', ascending=False).reset_index(drop=True)
 
-@app.route('/api/countries_breakdown')
-def api_countries_breakdown():
-    df, year_cols = load_df()
-    isos = request.args.get('isos')
-    year = request.args.get('year', 'Total')
-    if not isos:
-        return jsonify({'error':'isos required'}), 400
-    iso_list = [s.strip().upper() for s in isos.split(',') if s.strip()]
+    tech = (df.groupby('Technology', as_index=False)['Energy_Value'].sum())
+    tech['pct'] = (tech['Energy_Value'] / (total if total>0 else 1) * 100).round(2)
+    tech = tech.sort_values('Energy_Value', ascending=False).reset_index(drop=True)
 
-    df_sel = df[df['ISO3'].astype(str).str.upper().isin(iso_list)]
-    if df_sel.empty:
-        return jsonify({'isos': iso_list, 'total': 0, 'breakdown': [], 'tech_breakdown': [], 'rows_count': 0})
-
-    if year == 'Total':
-        df_sel['Energy_Value'] = df_sel[year_cols].sum(axis=1)
-    else:
-        if year not in year_cols:
-            return jsonify({'error':'invalid year'}), 400
-        df_sel['Energy_Value'] = df_sel[year].astype(float)
-
-    total = float(df_sel['Energy_Value'].sum())
-    br = df_sel.groupby('Energy_Type', as_index=False)['Energy_Value'].sum()
-    br['pct'] = (br['Energy_Value'] / total * 100).round(2).fillna(0)
-    br = br.sort_values('Energy_Value', ascending=False)
-    tech = df_sel.groupby('Technology', as_index=False)['Energy_Value'].sum().sort_values('Energy_Value', ascending=False)
-    tech['pct'] = (tech['Energy_Value'] / total * 100).round(2).fillna(0)
+    # NUEVO: pares Energy_Type x Technology para construir el sunburst RN -> tecnologías
+    pairs = (df.groupby(['Energy_Type','Technology'], as_index=False)['Energy_Value'].sum())
+    pairs['pct'] = (pairs['Energy_Value'] / (total if total>0 else 1) * 100).round(2)
+    pairs = pairs.sort_values('Energy_Value', ascending=False).reset_index(drop=True)
 
     return jsonify({
-        'isos': iso_list,
-        'year': year,
-        'total': total,
-        'breakdown': br.to_dict(orient='records'),
-        'tech_breakdown': tech.to_dict(orient='records'),
-        'rows_count': int(len(df_sel))
+        "total": total,
+        "breakdown": br.to_dict(orient='records'),
+        "tech_breakdown": tech.to_dict(orient='records'),
+        "pairs": pairs.to_dict(orient='records')
     })
 
 @app.route('/api/country_details')
 def api_country_details():
-    df, year_cols = load_df()
+    df, _, _ = _load_df_cached()
     iso = request.args.get('iso')
-    year = request.args.get('year', 'Total')
-    tech = request.args.get('technology', None)
-    if not iso:
-        return jsonify({'error':'iso required'}), 400
-
-    df_country = df[df['ISO3'].astype(str).str.upper() == iso.upper()]
-    if tech:
-        df_country = df_country[df_country['Technology'].astype(str).str.contains(tech, case=False, na=False)]
-
-    if year == 'Total':
-        df_country['Energy_Value'] = df_country[year_cols].sum(axis=1)
-    else:
-        if year not in year_cols:
-            return jsonify([])
-        df_country['Energy_Value'] = df_country[year].astype(float)
-
-    df_country = df_country.fillna('').astype(object)
-    rows = df_country.to_dict(orient='records')
-    return jsonify(rows)
+    year = _parse_year_param(request.args.get('year'))
+    if not iso: return jsonify({'error': 'iso required'}), 400
+    dfc = df[df['ISO3'].str.upper() == iso.upper()].copy()
+    if dfc.empty: return jsonify([])
+    dfc = _attach_energy_value(dfc, year)
+    return jsonify(dfc.to_dict(orient='records'))
 
 @app.route('/api/download_country_csv')
 def api_download_country_csv():
-    df, year_cols = load_df()
+    df, _, _ = _load_df_cached()
     iso = request.args.get('iso')
-    if not iso:
-        return jsonify({'error':'iso required'}), 400
-    df_country = df[df['ISO3'].astype(str).str.upper() == iso.upper()]
-    if df_country.empty:
-        return jsonify({'error':'no data'}), 404
+    if not iso: return jsonify({'error':'iso required'}), 400
+    dfc = df[df['ISO3'].str.upper() == iso.upper()]
+    if dfc.empty: return jsonify({'error':'no data'}), 404
     mem = io.StringIO()
-    df_country.to_csv(mem, index=False)
+    dfc.to_csv(mem, index=False)
     mem.seek(0)
-    return send_file(io.BytesIO(mem.getvalue().encode('utf-8')), mimetype='text/csv', as_attachment=True, attachment_filename=f'{iso}_data.csv')
+    return send_file(io.BytesIO(mem.getvalue().encode('utf-8')),
+                     mimetype='text/csv',
+                     as_attachment=True,
+                     download_name=f'{iso}_data.csv')
 
 if __name__ == '__main__':
     app.run(debug=True)
