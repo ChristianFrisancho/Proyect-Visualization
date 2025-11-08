@@ -1,11 +1,11 @@
-// main.js - slider, play y status
+// main.js - slider, autoplay y utilidades de selección/limpieza
 (async function(){
-  const status = document.getElementById('statusbar');
   const yearsResp = await fetch('/api/years').then(r => r.json());
   const years = yearsResp.years || [];
   const yearRange = document.getElementById('yearRange');
   const yearLabel = document.getElementById('yearLabel');
   const playBtn = document.getElementById('playPause');
+  const clearBtn = document.getElementById('clearSelection');
 
   if (years.length){
     yearRange.min = Math.min(...years);
@@ -15,9 +15,8 @@
   }
 
   function dispatchYear(y){
-    const val = String(y).startsWith('F') ? y : 'F' + y;
-    window.dispatchEvent(new CustomEvent('yearChange', { detail: { year: val } }));
-    if (status) status.textContent = `Año activo: ${String(y).replace(/^F/,'')}`;
+    const yearCol = 'F' + y;
+    window.dispatchEvent(new CustomEvent('yearChange', { detail: { year: yearCol } }));
   }
 
   yearRange.addEventListener('input', (e)=> {
@@ -30,16 +29,21 @@
     if (playing){ clearInterval(intervalId); playing = false; playBtn.textContent = '▶️'; return; }
     playing = true; playBtn.textContent = '⏸️';
     intervalId = setInterval(() => {
-      let v = Number(yearRange.value) + 1;
+      let v = Number(yearRange.value);
+      v = v + 1;
       if (v > Number(yearRange.max)) v = Number(yearRange.min);
       yearRange.value = v; yearLabel.innerText = v;
       dispatchYear(v);
     }, 900);
   });
 
-  document.addEventListener('visibilitychange', ()=> {
-    if (document.hidden && playing){ clearInterval(intervalId); playing = false; playBtn.textContent = '▶️'; }
+  // 🧹 limpiar selección global (mapa + sunburst)
+  clearBtn.addEventListener('click', () => {
+    window.__selectedIsos = new Set();
+    window.dispatchEvent(new CustomEvent('selectionChanged', { detail: { isos: [] } }));
+    window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows: [] } }));
   });
 
+  // dispatch inicial
   dispatchYear(yearRange.value);
 })();

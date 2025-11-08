@@ -1,98 +1,118 @@
-// sunburst.js - Anillo interno: Renewable/Non-Renewable; Externo: Tecnologías
+// sunburst.js — donut 2 anillos (inner: Renewable/Non-Renewable; outer: tecnologías)
+// Centro: %RN / %NR. Leyenda colapsable con botón “🧩 Agregar” (modo suma) y “Limpiar”.
+// HOVER → envía sólo { techs } (autobrush por tecnología dominante en el mapa).
+// CLICK → selección por bloques (Ctrl/⌘ o 🧩 para sumar/quitar; Shift en el mapa = replace).
+
 (function(){
   const container = d3.select('#sunburst');
-  const tooltip = d3.select('#tooltip');
+  const tooltip   = d3.select('#tooltip');
 
-  const cssVar = (name, fallback) =>
-    (getComputedStyle(document.documentElement).getPropertyValue(name) || fallback).trim() || fallback;
-
-  function isRenewable(type){
-    if (!type) return false;
-    const s = String(type).toLowerCase();
-    return s.includes('renewable') || s.includes('hydro') || s.includes('solar') ||
-           s.includes('wind') || s.includes('geothermal') || s.includes('biomass');
-  }
-
-  function clear(){
-    container.selectAll('*').remove();
-    d3.selectAll('.legendBox').remove();
-  }
-
-  async function fetchAndRender(isos, yearCol){
-    let url = '/api/aggregated';
-    const params = [];
-    if (yearCol) params.push(`year=${encodeURIComponent(yearCol)}`);
-    if (isos && isos.length) params.push(`isos=${encodeURIComponent(isos.join(','))}`);
-    if (params.length) url += '?' + params.join('&');
-    const res = await fetch(url).then(r => r.json());
-    render(res, isos, yearCol);
-  }
-
+  const cssVar = (name, fallback) => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return (v && v.trim()) || fallback;
+  };
   function safePalette(){
     const p = [];
     if (d3.schemeTableau10) p.push(...d3.schemeTableau10);
     if (d3.schemeSet3)     p.push(...d3.schemeSet3);
     if (d3.schemePaired)   p.push(...d3.schemePaired);
-    if (!p.length)         p.push('#2ca9b7','#ff7f0e','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf');
+    if (!p.length)         p.push('#3b82f6','#f59e0b','#16a34a','#ef4444','#a855f7','#22d3ee','#eab308','#10b981');
     return p;
+  }
+  function isRenewable(txt){
+    if (!txt) return false;
+    const s = String(txt).toLowerCase();
+    return s.includes('renew') || s.includes('hydro') || s.includes('solar') ||
+           s.includes('wind')  || s.includes('geother') || s.includes('biomass') ||
+           s.includes('bio')   || s.includes('tide') || s.includes('wave');
+  }
+  function clear(){
+    container.selectAll('*').remove();
+    d3.selectAll('.legendBox').remove();
+  }
+
+  // Estado global persistente: addMode ON por defecto, leyenda colapsada por defecto
+  if (window.__addMode === undefined) window.__addMode = true;
+  window.__legendCollapsed = window.__legendCollapsed ?? true;
+
+  async function fetchAndRender(isos, yearCol){
+    let url = '/api/aggregated';
+    const qs = [];
+    if (yearCol) qs.push(`year=${encodeURIComponent(yearCol)}`);
+    if (isos && isos.length) qs.push(`isos=${encodeURIComponent(isos.join(','))}`);
+    if (qs.length) url += '?' + qs.join('&');
+    const res = await fetch(url).then(r => r.json());
+    render(res, isos, yearCol);
   }
 
   function render(data, isos, yearCol){
     clear();
-    const width = container.node().clientWidth || 720;
+
+    const width  = container.node().clientWidth  || 720;
     const height = Math.max(520, container.node().clientHeight || 520);
+
     const svg = container.append('svg')
       .attr('width','100%').attr('height', height)
       .attr('viewBox', `0 0 ${width} ${height}`)
       .attr('preserveAspectRatio','xMidYMid meet');
+
     const g = svg.append('g').attr('transform', `translate(${width/2},${height/2})`);
 
-    const total = data.total || 0;
-    const pairs  = data.pairs || [];        // [{Energy_Type, Technology, Energy_Value, pct}, ...]
-
-    if (!pairs.length){
-      g.append('text')
-        .attr('text-anchor','middle').attr('dy','0')
+    // ---- preparar outer = tecnologías limpias; inner = RN/NR
+    const techRows = Array.isArray(data.tech_breakdown) ? data.tech_breakdown : [];
+    const cleaned  = techRows.filter(t => {
+      const name = (t.Technology ?? '').toString().trim();
+      return name && name.toLowerCase() !== 'nan';
+    });
+    if (!cleaned.length){
+      g.append('text').attr('text-anchor','middle')
         .style('font-size','16px').style('fill', cssVar('--panel-text','#111'))
         .text('No hay datos para la selección');
       return;
     }
 
-    // Construye: RN/NR -> tecnologías
-    const groups = { Renewable: [], 'Non-Renewable': [] };
-    pairs.forEach(p => {
-      const techName = (p.Technology && p.Technology.toLowerCase() !== 'nan') ? p.Technology : p.Energy_Type;
-      const grp = isRenewable(p.Energy_Type) ? 'Renewable' : 'Non-Renewable';
-      groups[grp].push({ name: techName, value: p.Energy_Value });
+    const byTech = new Map();
+    cleaned.forEach(r => {
+      const key   = String(r.Technology);
+      const value = +r.Energy_Value || 0;
+      byTech.set(key, (byTech.get(key)||0) + value);
     });
 
-    // Agrega por tecnología dentro de cada grupo (por si viene repetida)
-    const aggChildren = (arr) => {
-      const m = new Map();
-      arr.forEach(x => m.set(x.name, (m.get(x.name)||0) + (x.value||0)));
-      return Array.from(m.entries()).map(([name, value]) => ({ name, value }));
-    };
+    const rnChildren = [], nrChildren = [];
+    byTech.forEach((v,k) => (isRenewable(k) ? rnChildren : nrChildren).push({ name:k, value:v }));
 
-    const rootObj = {
-      name: 'root',
+    const rnTotal = d3.sum(rnChildren, d => d.value);
+    const nrTotal = d3.sum(nrChildren, d => d.value);
+    const total   = rnTotal + nrTotal;
+    const rnPct   = total ? (rnTotal/total*100) : 0;
+    const nrPct   = total ? (nrTotal/total*100) : 0;
+
+    const techNames = Array.from(new Set([...rnChildren, ...nrChildren].map(t => t.name))).sort((a,b)=>a.localeCompare(b));
+    const orderMap  = new Map(techNames.map((n,i)=>[n,i]));
+
+    const rootObj = { name:'root',
       children: [
-        { name: 'Renewable', children: aggChildren(groups.Renewable) },
-        { name: 'Non-Renewable', children: aggChildren(groups['Non-Renewable']) }
+        { name:'Renewable',     children: rnChildren },
+        { name:'Non-Renewable', children: nrChildren }
       ]
     };
+    const root = d3.hierarchy(rootObj).sum(d => d.value || 0);
+    root.each(node => {
+      if (!node.children) return;
+      node.children.sort((a,b) => {
+        if (node.depth === 0) return (a.data.name === 'Renewable' ? 0 : 1) - (b.data.name === 'Renewable' ? 0 : 1);
+        return (orderMap.get(a.data.name) ?? 0) - (orderMap.get(b.data.name) ?? 0);
+      });
+    });
 
-    const root = d3.hierarchy(rootObj).sum(d => d.value || 0).sort((a,b)=> b.value - a.value);
-
-    const radius = Math.min(width, height) * 0.42;
+    const radius    = Math.min(width, height) * 0.42;
     const partition = d3.partition().size([2*Math.PI, radius]);
     partition(root);
 
-    const colorInner = d3.scaleOrdinal().domain(['Renewable','Non-Renewable'])
-                        .range([cssVar('--accent','#2ca9b7'), cssVar('--accent-nr','#ff7f0e')]);
-    const techNames = Array.from(new Set([...(groups.Renewable||[]), ...(groups['Non-Renewable']||[])]
-                      .map(t => t.name)));
-    const outerPalette = safePalette();
-    const outerColor = d3.scaleOrdinal().domain(techNames).range(outerPalette);
+    const colorInner = d3.scaleOrdinal()
+      .domain(['Renewable','Non-Renewable'])
+      .range([cssVar('--accent','#3b82f6'), cssVar('--accent-nr','#f59e0b')]);
+    const outerColor = d3.scaleOrdinal().domain(techNames).range(safePalette());
 
     const arc = d3.arc()
       .startAngle(d=>d.x0).endAngle(d=>d.x1)
@@ -101,158 +121,197 @@
 
     const nodes = root.descendants().filter(d => d.depth >= 1);
 
-    g.selectAll('path.node').data(nodes, d => d.data.name + '-' + d.depth).join('path')
+    g.selectAll('path.node').data(nodes, d => d.ancestors().map(a=>a.data.name).join('/')).join('path')
       .attr('class','node')
       .attr('d', arc)
       .attr('fill', d => d.depth === 1 ? colorInner(d.data.name) : outerColor(d.data.name))
       .attr('stroke', '#fff').attr('stroke-width', 0.6)
+
+      // HOVER → sólo techs (mapa decide por top-tech)
       .on('mouseenter', (e,d) => {
         const label = d.data.name;
-        const val = d.value || 0;
-        const pctTotal = total ? (val / total * 100).toFixed(2) + '%' : '0%';
-        tooltip.style('visibility','visible').html(
-          `<strong>${label}</strong><div>Valor: ${d3.format(',')(Math.round(val))}</div><div>Porcentaje del total: ${pctTotal}</div>`
-        );
+        const val   = d.value || 0;
+        const pct   = total ? (val/total*100).toFixed(2)+'%' : '0%';
+        tooltip.style('visibility','visible')
+               .html(`<strong>${label}</strong><div>Valor: ${d3.format(',')(Math.round(val))}</div><div>Porcentaje del total: ${pct}</div>`);
 
-        // Hover: autobrush (no cambia selección)
-        const yr = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
         if (d.depth === 2){
           const tech = d.data.name;
-          fetch(`/api/data?technology=${encodeURIComponent(tech)}${yr?`&year=${encodeURIComponent(yr)}`:''}`)
-            .then(r=>r.json()).then(rows => {
-              window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows } }));
-            });
+          window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { techs: [tech] } }));
         } else if (d.depth === 1){
-          const childTechs = (d.children||[]).map(c=>c.data.name);
-          fetch(`/api/data${yr?`?year=${encodeURIComponent(yr)}`:''}`)
-            .then(r=>r.json()).then(rows => {
-              const filtered = rows.filter(r => childTechs.includes(r.Technology));
-              window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows: filtered } }));
-            });
+          const types = (d.children || []).map(c => c.data.name);
+          window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { techs: types } }));
         }
       })
       .on('mousemove', (e)=> tooltip.style('top',(e.pageY+12)+'px').style('left',(e.pageX+12)+'px'))
       .on('mouseleave', ()=> {
         tooltip.style('visibility','hidden');
-        // limpia highlight y vuelve al estado de selección
-        window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows: [] } }));
+        const arr = Array.from(window.__selectedIsos || []);
+        window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { isos: arr, techs: [] } }));
       })
-      .on('click', (e,d) => {
-        const addToggle = e.ctrlKey || e.metaKey;
-        const yr = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
-        const qYear = yr ? `&year=${encodeURIComponent(yr)}` : '';
 
-        if (d.depth === 2) {
-          // Click en tecnología -> selección y brushing
-          const technology = d.data.name;
-          fetch(`/api/data?technology=${encodeURIComponent(technology)}${qYear}`).then(r=>r.json()).then(rows => {
-            const isos = Array.from(new Set(rows.map(r => (r.ISO3||'').toString().toUpperCase()).filter(Boolean)));
-            if (addToggle){
-              const current = new Set(Array.from(window.__selectedIsos || []));
-              isos.forEach(i => current.has(i) ? current.delete(i) : current.add(i));
-              window.__selectedIsos = new Set(current);
-            } else {
-              window.__selectedIsos = new Set(isos);
-            }
-            const arr = Array.from(window.__selectedIsos);
-            window.dispatchEvent(new CustomEvent('selectionChanged', { detail: { isos: arr } }));
-            window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows } }));
-            window.dispatchEvent(new CustomEvent('countrySelected', { detail: { isos: arr } }));
-          });
+      // CLICK → selección por bloques (🧩/Ctrl/⌘ suma; sin eso, reemplaza)
+      .on('click', (e,d) => {
+        const yr    = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
+        const qYear = yr ? `&year=${encodeURIComponent(yr)}` : '';
+        const addMode = window.__addMode || e.ctrlKey || e.metaKey;
+
+        const toggleWithIsos = (isos) => {
+          if (!window.__selectedIsos) window.__selectedIsos = new Set();
+          if (addMode){
+            const cur = new Set(Array.from(window.__selectedIsos));
+            isos.forEach(i => cur.has(i) ? cur.delete(i) : cur.add(i));
+            window.__selectedIsos = new Set(cur);
+          } else {
+            window.__selectedIsos = new Set(isos);
+          }
+          const arr = Array.from(window.__selectedIsos);
+          window.dispatchEvent(new CustomEvent('selectionChanged', { detail: { isos: arr } }));
+          window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { isos: arr } }));
+          window.dispatchEvent(new CustomEvent('countrySelected',   { detail: { isos: arr } }));
+        };
+
+        if (d.depth === 2){
+          const tech = d.data.name;
+          fetch(`/api/data?technology=${encodeURIComponent(tech)}${qYear}`)
+            .then(r=>r.json()).then(rows => {
+              const isos = Array.from(new Set(rows.map(r => (r.ISO3||'').toString().toUpperCase()).filter(Boolean)));
+              toggleWithIsos(isos);
+            });
         } else if (d.depth === 1){
-          // Click en RN/NR -> agrupa todas sus tecnologías
-          const childTechs = (d.children||[]).map(c=>c.data.name);
-          fetch(`/api/data${qYear ? '?year='+encodeURIComponent(yr) : ''}`).then(r=>r.json()).then(rows => {
-            const filtered = rows.filter(r => childTechs.includes(r.Technology));
-            const isos = Array.from(new Set(filtered.map(r => (r.ISO3||'').toString().toUpperCase()).filter(Boolean)));
-            if (addToggle){
-              const current = new Set(Array.from(window.__selectedIsos || []));
-              isos.forEach(i => current.has(i) ? current.delete(i) : current.add(i));
-              window.__selectedIsos = new Set(current);
-            } else {
-              window.__selectedIsos = new Set(isos);
-            }
-            const arr = Array.from(window.__selectedIsos);
-            window.dispatchEvent(new CustomEvent('selectionChanged', { detail: { isos: arr } }));
-            window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { rows: filtered } }));
-            window.dispatchEvent(new CustomEvent('countrySelected', { detail: { isos: arr } }));
-          });
+          const types = (d.children || []).map(c => c.data.name);
+          fetch(`/api/data${qYear ? '?year='+encodeURIComponent(yr) : ''}`)
+            .then(r=>r.json()).then(rows => {
+              const filtered = rows.filter(r => types.includes(r.Technology));
+              const isos = Array.from(new Set(filtered.map(r => (r.ISO3||'').toString().toUpperCase()).filter(Boolean)));
+              toggleWithIsos(isos);
+            });
         }
       });
 
-    // Labels internos (porcentajes RN / NR)
+    // Etiquetas
     const innerNodes = root.descendants().filter(d => d.depth === 1);
     const innerLabelArc = d3.arc().innerRadius(d => d.y0 + (d.y1 - d.y0)/2).outerRadius(d => d.y0 + (d.y1 - d.y0)/2);
     g.selectAll('text.innerLabel').data(innerNodes).join('text')
       .attr('class','innerLabel')
-      .attr('transform', d => {
-        const [x,y] = innerLabelArc.centroid(d);
-        return `translate(${x},${y})`;
-      })
+      .attr('transform', d => `translate(${innerLabelArc.centroid(d)})`)
       .attr('text-anchor','middle')
       .style('fill','#fff').style('font-weight',700).style('font-size','12px')
       .text(d => total ? (d.value / total * 100).toFixed(1) + '%' : '0%');
 
-    // Labels externos (solo en arcos grandes)
     const outerNodes = root.descendants().filter(d => d.depth === 2 && (d.x1 - d.x0) > 0.06);
     const outerLabelArc = d3.arc().innerRadius(d => (d.y0 + d.y1)/2).outerRadius(d => (d.y0 + d.y1)/2);
     g.selectAll('text.outerLabel').data(outerNodes).join('text')
       .attr('class','outerLabel')
-      .attr('transform', d => {
-        const [x,y] = outerLabelArc.centroid(d);
-        return `translate(${x},${y})`;
-      })
+      .attr('transform', d => `translate(${outerLabelArc.centroid(d)})`)
       .attr('text-anchor','middle')
       .style('fill','#fff').style('font-weight',700).style('font-size','11px')
       .text(d => total ? (d.value / total * 100).toFixed(1) + '%' : '');
 
-    // Total en el centro
-    g.append('text')
-      .attr('text-anchor','middle').attr('dy','-6px')
+    // Centro (%RN / %NR)
+    g.append('text').attr('text-anchor','middle').attr('dy','-4px')
       .style('font-size','18px').style('font-weight','700')
       .style('fill', cssVar('--panel-text','#111'))
-      .text(d3.format(',')(Math.round(total)));
-    g.append('text')
-      .attr('text-anchor','middle').attr('dy','18px')
-      .style('font-size','12px')
-      .style('fill', cssVar('--panel-text','#111'))
-      .text('Total (unidad)');
+      .text(`Renovable ${rnPct.toFixed(1)}%`);
+    g.append('text').attr('text-anchor','middle').attr('dy','20px')
+      .style('font-size','12px').style('fill', cssVar('--panel-text','#111'))
+      .text(`No-Renovable ${nrPct.toFixed(1)}%`);
 
-    // Leyenda simple
+    // Leyenda
     const legend = container.append('div').attr('class','legendBox');
-    legend.append('div').style('font-weight','700').text('Leyenda (click = select; Ctrl+click = toggle)');
-    legend.append('div').style('margin-top','8px').html(`
-      <div style="display:flex;gap:8px;align-items:center">
-        <div style="width:12px;height:12px;background:${colorInner('Renewable')};border-radius:2px"></div>
-        <div>Renewable</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-        <div style="width:12px;height:12px;background:${colorInner('Non-Renewable')};border-radius:2px"></div>
-        <div>Non-Renewable</div>
-      </div>
+    if (window.__legendCollapsed) legend.classed('collapsed', true);
+
+    const header = legend.append('div').attr('class','legendHeaderBar');
+    header.append('div').text('Leyenda');
+
+    const controls = header.append('div').attr('class','legendControls');
+    const addBtn = controls.append('button')
+      .attr('class','legendBtnTiny' + (window.__addMode ? ' active' : ''))
+      .text(window.__addMode ? '🧩 Agregar ✓' : '🧩 Agregar')
+      .on('click', () => {
+        window.__addMode = !window.__addMode;
+        addBtn.classed('active', window.__addMode)
+              .text(window.__addMode ? '🧩 Agregar ✓' : '🧩 Agregar');
+      });
+    const collapseBtn = controls.append('button')
+      .attr('class','legendBtnTiny')
+      .text(window.__legendCollapsed ? '▸' : '▾')
+      .on('click', () => {
+        window.__legendCollapsed = !window.__legendCollapsed;
+        legend.classed('collapsed', window.__legendCollapsed);
+        collapseBtn.text(window.__legendCollapsed ? '▸' : '▾');
+      });
+
+    const body = legend.append('div').attr('class','legendBody');
+    body.append('div').attr('class','legendRow').html(`
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span class="swatch" style="background:${cssVar('--accent','#3b82f6')}"></span>
+        <span>Renewable</span>
+      </span>
+      <span class="legendPct">${rnPct.toFixed(1)}%</span>
     `);
+    body.append('div').attr('class','legendRow').html(`
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span class="swatch" style="background:${cssVar('--accent-nr','#f59e0b')}"></span>
+        <span>Non-Renewable</span>
+      </span>
+      <span class="legendPct">${nrPct.toFixed(1)}%</span>
+    `);
+
+    body.append('div')
+      .style('margin','8px 0')
+      .style('border-top','1px solid '+cssVar('--stroke-soft','#e5e7eb'))
+      .style('height','1px');
+
+    const topTech = [...rnChildren, ...nrChildren]
+      .sort((a,b)=> a.name.localeCompare(b.name)).slice(0,8);
+    topTech.forEach(t => {
+      const p = total ? (t.value/total*100).toFixed(1) : '0.0';
+      body.append('div').attr('class','legendRow').html(`
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span class="swatch" style="background:${outerColor(t.name)}"></span>
+          <span>${t.name}</span>
+        </span>
+        <span class="legendPct">${p}%</span>
+      `);
+    });
+
+    body.append('button').attr('id','legendClear').attr('class','legendBtn').text('🧹 Limpiar selección');
+    body.append('div').attr('class','legendHint').text('Click = seleccionar · Ctrl+click o 🧩 Agregar = sumar/quitar');
+
+    document.getElementById('legendClear').addEventListener('click', () => {
+      window.__selectedIsos = new Set();
+      const arr = [];
+      window.dispatchEvent(new CustomEvent('selectionChanged', { detail: { isos: arr } }));
+      window.dispatchEvent(new CustomEvent('highlightCountries', { detail: { isos: arr, techs: [] } }));
+    });
 
     container.node().scrollTop = 0;
   }
 
+  // Listeners
   window.addEventListener('selectionChanged', ev => {
     const isos = ev.detail.isos || [];
     const year = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
     fetchAndRender(isos.length ? isos : null, year);
   });
-
   window.addEventListener('countrySelected', ev => {
     const isos = ev.detail.isos || (ev.detail.iso ? [ev.detail.iso] : []);
     const year = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
     fetchAndRender(isos.length ? isos : null, year);
   });
-
   window.addEventListener('yearChange', ev => {
     const year = ev.detail.year || null;
     const currentSel = (window.__selectedIsos && window.__selectedIsos.size) ? Array.from(window.__selectedIsos) : null;
     fetchAndRender(currentSel, year);
   });
+  window.addEventListener('themeChanged', ()=> {
+    const year = (document.getElementById('yearRange')?.value) ? 'F' + document.getElementById('yearRange').value : null;
+    const currentSel = (window.__selectedIsos && window.__selectedIsos.size) ? Array.from(window.__selectedIsos) : null;
+    fetchAndRender(currentSel, year);
+  });
 
+  // Init
   const initialYear = 'F' + (document.getElementById('yearRange')?.value || '2023');
   fetchAndRender(null, initialYear);
 })();
