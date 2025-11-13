@@ -27,7 +27,10 @@ export async function render({ model, el }) {
       panel_position:"right", panel_width:300, panel_height:220,
       title:null, xLabel:null, yLabel:null
     }, model.get("options") || {});
-    
+
+      // ⬇️ NEW: global flag for axis locking
+      let axesLocked = false;
+      let showDiagonal = false;
       // --- Year-aware remapping (TechUnit__FYYYY -> TechUnit) ---   #! added to try to fix year slider
       const listVars = Array.isArray(o.xyVars) ? o.xyVars.filter(Boolean) : [];
       let currentYear = null;
@@ -93,6 +96,45 @@ export async function render({ model, el }) {
     const gTitle = svg.append("g");
     const gLegend= svg.append("g");   // legend is OUTSIDE the plot
     const gPanel = svg.append("g");
+        
+    // Thin x = y diagonal (initially hidden)
+    const diagonal = gPlot.append("line")
+      .attr("class", "diag-line")
+      .attr("stroke", "#9CA3AF")
+      .attr("stroke-width", 1)
+      .attr("stroke-dasharray", "4,4")
+      .style("pointer-events", "none")
+      .style("display", "none");
+
+    function updateDiagonal() {
+      if (!showDiagonal) {
+        diagonal.style("display", "none");
+        return;
+      }
+
+      const xDom = sx.domain();
+      const yDom = sy.domain();
+      const xMin = Math.min(xDom[0], xDom[1]);
+      const xMax = Math.max(xDom[0], xDom[1]);
+      const yMin = Math.min(yDom[0], yDom[1]);
+      const yMax = Math.max(yDom[0], yDom[1]);
+
+      const lo = Math.max(xMin, yMin);
+      const hi = Math.min(xMax, yMax);
+
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+        diagonal.style("display", "none");
+        return;
+      }
+
+      diagonal
+        .style("display", "")
+        .attr("x1", sx(lo))
+        .attr("y1", sy(lo))
+        .attr("x2", sx(hi))
+        .attr("y2", sy(hi));
+    }
+
     
     //todo for zoom ===== Reset-zoom overlay button (always visible) =====
     // --- Clip everything to the plot area so nothing draws outside
@@ -113,28 +155,107 @@ export async function render({ model, el }) {
 
     wrap.style.position = "relative"; // anchor for absolute children
 
-    const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Reset zoom";
-    resetBtn.title = "Reset zoom";
-    Object.assign(resetBtn.style, {
+    // === Top-right zoom / scale controls (Reset, Lock, 0–100) ===
+    const toolbar = document.createElement("div");
+    Object.assign(toolbar.style, {
       position: "absolute",
       top: Math.max(4, m.t - 28) + "px",
-      left: (m.l + plotW - 96) + "px", // nudge to the right edge of the plot
-      padding: "4px 8px",
-      font: "12px/1.2 sans-serif",
-      borderRadius: "8px",
-      border: "1px solid #D1D5DB",
-      background: "#FFFFFF",
-      color: "#111827",
-      cursor: "pointer",
-      boxShadow: "0 1px 2px rgba(0,0,0,.06)"
+      left: (m.l + plotW - 220) + "px",   // room for 3 small buttons
+      display: "flex",
+      gap: "6px",
+      alignItems: "center",
     });
-    wrap.appendChild(resetBtn);
+    wrap.appendChild(toolbar);
+
+    function makeTopButton(label) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      Object.assign(b.style, {
+        padding: "4px 8px",
+        font: "12px/1.2 sans-serif",
+        borderRadius: "8px",
+        border: "1px solid #D1D5DB",
+        background: "#FFFFFF",
+        color: "#111827",
+        cursor: "pointer",
+        boxShadow: "0 1px 2px rgba(0,0,0,.06)",
+      });
+      return b;
+    }
+
+    // Reset zoom button
+    const resetBtn = makeTopButton("Reset zoom");
+    resetBtn.title = "Reset zoom to data extent";
+    toolbar.appendChild(resetBtn);
 
     resetBtn.addEventListener("click", () => {
-      updateScalesAndAxes(0.05);
+      // Force recompute domains even if locked
+      updateScalesAndAxes(0.05, true);
       repositionPoints();
-      try { gBrush.call(brush.move, null); } catch(e) {}
+      try { gBrush.call(brush.move, null); } catch (e) {}
+    });
+
+    // Lock axes button
+    const lockBtn = makeTopButton("Lock axes");
+    lockBtn.title = "Lock current axes so zoom & scales don’t change while sliding year";
+    toolbar.appendChild(lockBtn);
+
+    function refreshLockButton() {
+      if (axesLocked) {
+        lockBtn.style.background = "#111827";
+        lockBtn.style.color = "#FFFFFF";
+      } else {
+        lockBtn.style.background = "#FFFFFF";
+        lockBtn.style.color = "#111827";
+      }
+    }
+    refreshLockButton();
+
+    lockBtn.addEventListener("click", () => {
+      axesLocked = !axesLocked;
+      refreshLockButton();
+    });
+
+    // Set both axes to 0–100
+    const scale100Btn = makeTopButton("0–100");
+    scale100Btn.title = "Set both axes to 0–100";
+    toolbar.appendChild(scale100Btn);
+
+    scale100Btn.addEventListener("click", () => {
+      // Hard-set domains to [0, 100] for both axes
+      sx.domain([0, 100]);
+      sy.domain([0, 100]);
+
+      gx.call(d3.axisBottom(sx).ticks(o.xTicks || 8));
+      gx.select(".x-label").text(o.xLabel ?? String(o.x));
+      gy.call(d3.axisLeft(sy).ticks(o.yTicks || 8));
+      gy.select(".y-label").text(o.yLabel ?? String(o.y));
+
+      updateGrid();
+      updateDiagonal();
+      repositionPoints();
+    });
+
+    // Toggle x = y diagonal
+    const diagBtn = makeTopButton("x = y");
+    diagBtn.title = "Toggle y = x reference line";
+    toolbar.appendChild(diagBtn);
+
+    function refreshDiagButton() {
+      if (showDiagonal) {
+        diagBtn.style.background = "#F3F4F6";
+        diagBtn.style.borderColor = "#9CA3AF";
+      } else {
+        diagBtn.style.background = "#FFFFFF";
+        diagBtn.style.borderColor = "#D1D5DB";
+      }
+    }
+    refreshDiagButton();
+
+    diagBtn.addEventListener("click", () => {
+      showDiagonal = !showDiagonal;
+      refreshDiagButton();
+      updateDiagonal();
     });
 
 
@@ -341,7 +462,10 @@ export async function render({ model, el }) {
 
 
     //todo fixing padding padMax = 0 for no padding (e.g. while zoomed); use 0.05 for +5% on the MAX side only
-    function updateScalesAndAxes(padMax = 0) {
+    function updateScalesAndAxes(padMax = 0, force = false) {
+      // If locked, skip recomputing domains unless explicitly forced
+      if (axesLocked && !force) return;
+
       const XV2 = data.map(d => +d[o.x]).filter(Number.isFinite);
       const YV2 = data.map(d => +d[o.y]).filter(Number.isFinite);
 
@@ -366,7 +490,9 @@ export async function render({ model, el }) {
       gy.select(".y-label").text(o.yLabel ?? String(o.y));
 
       updateGrid();
+      updateDiagonal();
     }
+
     
 
     function repositionPoints() {
@@ -479,8 +605,28 @@ export async function render({ model, el }) {
       // -- Initial render
       
 
-      function setX(v) { if (v !== o.x) { o.x = v; updateScalesAndAxes(0.05); repositionPoints(); renderButtons(); renderToolButtons(); } }
-      function setY(v) { if (v !== o.y) { o.y = v; updateScalesAndAxes(0.05); repositionPoints(); renderButtons(); renderToolButtons(); } }
+      function setX(v) {
+        if (v !== o.x) {
+          o.x = v;
+          // Force rescale even if axesLocked: changing variable should reset axes
+          updateScalesAndAxes(0.05, true);
+          repositionPoints();
+          renderButtons();
+          renderToolButtons();
+        }
+      }
+
+      function setY(v) {
+        if (v !== o.y) {
+          o.y = v;
+          // Same logic for Y
+          updateScalesAndAxes(0.05, true);
+          repositionPoints();
+          renderButtons();
+          renderToolButtons();
+        }
+      }
+
 
 
       function renderButtons() {
