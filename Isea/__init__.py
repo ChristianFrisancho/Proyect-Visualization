@@ -2,39 +2,39 @@
 from ._version import __version__
 from .base_widget import IseaWidget
 
-# NUEVO widget (anywidget)
 from .parallel import ParallelEnergy
 from .radial_stacked_bar import RadialStackedBar
 
 from .graphs import (
-    ScatterBrushOld,      # scatter con tooltip/leyenda
+    ScatterBrushOld,      # scatter con tooltip/leyenda (versión antigua)
     BeeSwarmCapacity,
-    # ParallelEnergy,     # <- QUITAR/COMENTAR para evitar duplicado
-    #RadialStackedBar,
-    #WorldRenewable,
     BubblePack,
 )
-from .layouts import LinkedEnergyDashboard
 
-# Added by Milan
+from .world_renewable import WorldRenewable
 from .scatter import ScatterBrush
 from .energy_quad import EnergyQuad
 
+# NUEVO: dashboard de energía
+from .energy_dashboard import EnergyDashboardWidget, show_energy_dashboard
+
+from .layouts import LinkedEnergyDashboard
+from .widgets import ensure_bus, card
 
 __all__ = [
     "__version__",
     "IseaWidget",
-    "RadialStackedBar",      
+    "RadialStackedBar",
     "ScatterBrush",
     "BeeSwarmCapacity",
-    "ParallelEnergy",          # <-- el del widget
-    "RadialStackedBar",
+    "ParallelEnergy",
     "WorldRenewable",
     "BubblePack",
     "LinkedEnergyDashboard",
-    "WorldRenewable",
     "EnergyQuad",
+    # Nuevos
+    "EnergyDashboardWidget",
+    "show_energy_dashboard",
+    "ensure_bus",
+    "card",
 ]
-
-# Added by Alex
-from .world_renewable import WorldRenewable
