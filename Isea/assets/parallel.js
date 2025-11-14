@@ -25,7 +25,7 @@ export function render({ model, el }) {
     // paleta por dimensión (overrideable)
     const pal = (opts.palette) || {
       StockBEV:"#2563eb", StockPHEV:"#f59e0b", StockFCEV:"#a855f7",
-      SalesBEV:"#ef4444", SalesPHEV:"#10b981", SalesFCEV:"#6366f1",
+      SalesBEV:"#ef4444", SalesPHEV:"#10b981", SalesFCEV:"#940b6bff",
       StockShare:"#22c55e", ChargingStations:"#0ea5e9"
     };
     const color = d3.scaleOrdinal(Object.keys(pal), Object.values(pal));
