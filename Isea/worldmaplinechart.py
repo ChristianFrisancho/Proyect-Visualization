@@ -98,7 +98,12 @@ class WorldMapLineChart(anywidget.AnyWidget):
         }
 
         js_path = Path(__file__).parent / "assets" / "worldmaplinechart.js"
-        self._esm = js_path.read_text()
+        # Read JS and strip a possible UTF-8 BOM so anywidget doesn't choke on it
+        js_text = js_path.read_text(encoding="utf-8")
+        if js_text.startswith("\ufeff"):
+            js_text = js_text.lstrip("\ufeff")
+        self._esm = js_text
+
 
     # ============================================================
     # INTERNAL: Rebuild records for a given metric
