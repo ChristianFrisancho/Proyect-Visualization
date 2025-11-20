@@ -44,13 +44,12 @@ export async function render({ model, el }) {
   const wrapper = document.createElement("div");
   wrapper.style.cssText = `
     display:grid;
-    grid-template-rows:${mapH}px ${bottomH}px;
     gap:${gap}px;
     width:${totalW}px;
     max-width:${totalW}px;
     overflow-x:auto;
     font-family:sans-serif;
-    color:#e5e7eb;
+    color:#94a3b8;
   `;
   el.appendChild(wrapper);
 
@@ -58,10 +57,12 @@ export async function render({ model, el }) {
   const bottom = document.createElement("div");
   bottom.style.cssText = `
     display:grid;
-    grid-template-columns:${chartW}px ${panelW}px;
+    grid-template-columns:1fr 1fr;   /* 50/50 layout */
     gap:${gap}px;
-    overflow-x:auto;
+    overflow:hidden;
   `;
+
+
   wrapper.appendChild(mapContainer);
   wrapper.appendChild(bottom);
 
@@ -132,7 +133,7 @@ export async function render({ model, el }) {
 
   const yearLbl = controls.append("span")
     .style("font","12px sans-serif")
-    .style("color","#e5e7eb")
+    .style("color","#94a3b8")
     .text(YEARS[idx]);
 
   // ------------------ Mode colors ------------------
@@ -239,10 +240,23 @@ export async function render({ model, el }) {
   // ======================================================================
   // LINE CHART
   // ======================================================================
+
+  // Instead of using chartW, compute width from container size later
+  const chartHeight = 400;
   const chartSvg = d3.select(chartContainer)
     .append("svg")
-    .attr("width", chartW)
-    .attr("height", bottomH);
+    .style("width", "100%")
+    .attr("height", chartHeight);
+
+
+  // NEW: container for mode legend between linechart and table
+  const midLegendContainer = d3.select(chartContainer)
+    .insert("div", ":first-child")
+    .attr("id", "mid-mode-legend")
+    .style("display", "flex")
+    .style("gap", "12px")
+    .style("padding", "8px 0")  
+    .style("align-items", "center");
 
   // group for legends above the plot
   const topLegendGroup = chartSvg.append("g")
@@ -251,7 +265,8 @@ export async function render({ model, el }) {
   const gl = chartSvg.append("g")
     .attr("transform","translate(52,40)");
 
-  const lw = chartW - 52 - 26;
+  const chartWidth = chartContainer.clientWidth;  // actual width in 50/50 cell
+  const lw = chartWidth - 52 - 26;
   const lh = bottomH - 80;   // space for legends + title
 
   // X scale is fixed over all years
@@ -291,7 +306,7 @@ export async function render({ model, el }) {
     .attr("x",52)
     .attr("y",25)
     .style("font","600 12px sans-serif")
-    .attr("fill","#e5e7eb")
+    .attr("fill","#94a3b8")
     .text("Select one or more countries…");
 
   // ------------------ Y-domain logic (full time series) ------------------
@@ -322,101 +337,99 @@ export async function render({ model, el }) {
 // ======================================================================
 // LEGENDS INSIDE SLIDER ROW (on the right)
 // ======================================================================
+
 function drawTopLegends() {
 
-  // Clear
-  controls.selectAll(".legend-wrap").remove();
+  // Clear previous legends
+  d3.select("#mid-mode-legend").html("");
 
-  // Wrapper for both legends
-  const legendWrap = controls.append("div")
-    .attr("class", "legend-wrap")
+  // ===========================================================
+  // COLOR SCALE LEGEND  (moved above the linechart)
+  // ===========================================================
+  const scaleWrap = d3.select("#mid-mode-legend")
+    .append("div")
     .style("display", "flex")
     .style("align-items", "center")
-    .style("gap", "20px")
-    .style("margin-left", "auto")   // <- pushes legends to the right
-    .style("pointer-events", "none"); // <- legends never block interaction
+    .style("gap", "10px");
 
-  // ==================================================================
-  // COLOR SCALE LEGEND
-  // ==================================================================
-  const scaleSvg = legendWrap.append("svg")
+  const scaleSvg = scaleWrap.append("svg")
     .attr("width", 160)
     .attr("height", 28);
 
-  // gradient
   const defs = scaleSvg.append("defs");
   const grad = defs.append("linearGradient")
-      .attr("id","legend-gradient")
-      .attr("x1","0%").attr("x2","100%")
-      .attr("y1","0%").attr("y2","0%");
+    .attr("id", "legend-gradient")
+    .attr("x1", "0%").attr("x2", "100%")
+    .attr("y1", "0%").attr("y2", "0%");
 
-  for (let i=0;i<=10;i++){
-    let s = i/10;
+  for (let i = 0; i <= 10; i++) {
+    let s = i / 10;
     grad.append("stop")
-      .attr("offset", (s*100)+"%")
+      .attr("offset", (s * 100) + "%")
       .attr("stop-color", col(s * maxVal));
   }
 
-  // label "Scale:"
+  // Scale: text
   scaleSvg.append("text")
-    .attr("x",0).attr("y",10)
-    .style("font","10px sans-serif")
-    .style("fill","#000000ff")
+    .attr("x", 0).attr("y", 10)
+    .style("font", "10px sans-serif")
+    .style("fill", "#94a3b8")
     .text("Scale:");
 
   // gradient bar
   scaleSvg.append("rect")
-    .attr("x",32).attr("y",4)
-    .attr("width",120).attr("height",10)
-    .style("fill","url(#legend-gradient)");
+    .attr("x", 32).attr("y", 4)
+    .attr("width", 120).attr("height", 10)
+    .style("fill", "url(#legend-gradient)");
 
-  // min value
+  // min + max value text
   scaleSvg.append("text")
-    .attr("x",32).attr("y",22)
-    .style("font","10px sans-serif")
-    .style("fill","#000000ff")
-    .text(d3.format(".2s")(0));
+    .attr("x", 32).attr("y", 22)
+    .style("font", "10px sans-serif")
+    .style("fill", "#94a3b8")
+    .text("0");
 
-  // max value
   scaleSvg.append("text")
-    .attr("x",152).attr("y",22)
-    .style("font","10px sans-serif")
-    .style("fill","#000000ff")
-    .attr("text-anchor","end")
+    .attr("x", 152).attr("y", 22)
+    .attr("text-anchor", "end")
+    .style("font", "10px sans-serif")
+    .style("fill", "#94a3b8")
     .text(d3.format(".2s")(maxVal));
 
-  // ==================================================================
-  // MODE LEGEND (Cars/Vans/Buses/Trucks)
-  // ==================================================================
-  const modeLegend = legendWrap.append("div")
-    .style("display","flex")
-    .style("gap","10px");
+  // ===========================================================
+  // MODE LEGEND (Cars / Vans / Buses / Trucks)
+  // ===========================================================
+  const modeLegend = d3.select("#mid-mode-legend")
+    .append("div")
+    .style("display", "flex")
+    .style("gap", "14px")
+    .style("align-items", "center");
 
-  Object.entries(modeColor).forEach(([mode,color]) => {
-
+  Object.entries(modeColor).forEach(([mode, color]) => {
     const item = modeLegend.append("div")
-      .style("display","flex")
-      .style("align-items","center")
-      .style("gap","4px");
+      .style("display", "flex")
+      .style("align-items", "center")
+      .style("gap", "6px");
 
     item.append("div")
-      .style("width","10px")
-      .style("height","10px")
-      .style("background",color)
-      .style("border-radius","2px");
+      .style("width", "12px")
+      .style("height", "12px")
+      .style("background", color)
+      .style("border-radius", "3px");
 
     item.append("span")
-      .style("font","10px sans-serif")
-      .style("color","#e5e7eb")
+      .style("font", "11px sans-serif")
+      .style("color", "#94a3b8")
       .text(mode);
   });
 }
+
 
   // ======================================================================
   // SELECTION PANEL TABLE
   // ======================================================================
   const selHead = document.createElement("div");
-  selHead.textContent = "Selection — 0 countries";
+  selHead.textContent = "Selection — 0 rows";
   selHead.style.cssText = `
     font:600 13px system-ui;color:#111827;margin:2px 0 8px 0;
   `;
@@ -432,22 +445,23 @@ function drawTopLegends() {
 
   const selBox = document.createElement("div");
   selBox.style.cssText = `
-    max-height:${bottomH-60}px;
     overflow:auto;
+    max-height:100%;
     border:1px solid #e2e8f0;
     border-radius:12px;
     background:#fff;
     box-shadow:0 1px 2px rgba(0,0,0,.04);
-    max-width:${panelW-200}px;
+    max-width:100%;
   `;
+
   panelContainer.appendChild(selBox);
 
   function renderSelPanel(records){
-    selHead.textContent = `Selection — ${records.length} countries`;
+    selHead.textContent = `Selection — ${records.length} rows`;
     selBox.innerHTML = "";
 
     const wrap = document.createElement("div");
-    wrap.style.overflow = "auto";
+    wrap.style.overflow = "visible";       /* no scroll */
     wrap.style.maxWidth = "100%";
     selBox.appendChild(wrap);
 
@@ -558,7 +572,7 @@ function drawTopLegends() {
 
     countries
       .attr("stroke-width", f=>selectedIso.has(isoKey(f))?1.5:0.25)
-      .attr("stroke",      f=>selectedIso.has(isoKey(f))?"#fff":"#111");
+      .attr("stroke",      f=>selectedIso.has(isoKey(f))?"#e5e7eb":"#111");
 
     const rows = REC.filter(r=>selectedIso.has(r.iso3))
       .map(r => ({Country:r.name, Value:r.values[idx]}));

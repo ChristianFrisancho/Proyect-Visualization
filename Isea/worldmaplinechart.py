@@ -14,19 +14,61 @@ from importlib.resources import files
 # ISO3 mapping
 # ---------------------------------------------------------------
 ISO3_MAP = {
-    "Australia": "AUS", "Austria": "AUT", "Belgium": "BEL", "Brazil": "BRA",
-    "Canada": "CAN", "Chile": "CHL", "China": "CHN", "Colombia": "COL",
-    "Czech Republic": "CZE", "Denmark": "DNK", "Egypt": "EGY", "Finland": "FIN",
-    "France": "FRA", "Germany": "DEU", "Greece": "GRC", "Hungary": "HUN",
-    "Iceland": "ISL", "India": "IND", "Indonesia": "IDN", "Ireland": "IRL",
-    "Israel": "ISR", "Italy": "ITA", "Japan": "JPN", "Luxembourg": "LUX",
-    "Mexico": "MEX", "Netherlands": "NLD", "New Zealand": "NZL", "Norway": "NOR",
-    "Poland": "POL", "Portugal": "PRT", "Russia": "RUS", "Saudi Arabia": "SAU",
-    "Singapore": "SGP", "Slovakia": "SVK", "Slovenia": "SVN", "South Africa": "ZAF",
-    "South Korea": "KOR", "Spain": "ESP", "Sweden": "SWE", "Switzerland": "CHE",
-    "Türkiye": "TUR", "United Kingdom": "GBR", "United States": "USA",
-    "World": "WLD", "EU27": "EUU"
+    "Australia": "AUS",
+    "Austria": "AUT",
+    "Belgium": "BEL",
+    "Brazil": "BRA",
+    "Bulgaria": "BGR",
+    "Canada": "CAN",
+    "Chile": "CHL",
+    "China": "CHN",
+    "Colombia": "COL",
+    "Costa Rica": "CRI",
+    "Croatia": "HRV",
+    "Cyprus": "CYP",
+    "Czech Republic": "CZE",
+    "Denmark": "DNK",
+    "Estonia": "EST",
+    "Finland": "FIN",
+    "France": "FRA",
+    "Germany": "DEU",
+    "Greece": "GRC",
+    "Hungary": "HUN",
+    "Iceland": "ISL",
+    "India": "IND",
+    "Indonesia": "IDN",
+    "Ireland": "IRL",
+    "Israel": "ISR",
+    "Italy": "ITA",
+    "Japan": "JPN",
+    "Korea": "KOR",                 # your dataset uses "Korea"
+    "Latvia": "LVA",
+    "Lithuania": "LTU",
+    "Luxembourg": "LUX",
+    "Mexico": "MEX",
+    "Netherlands": "NLD",
+    "New Zealand": "NZL",
+    "Norway": "NOR",
+    "Poland": "POL",
+    "Portugal": "PRT",
+    "Rest of the world": "ROW",     # synthetic code
+    "Romania": "ROU",
+    "Russia": "RUS",
+    "Saudi Arabia": "SAU",
+    "Seychelles": "SYC",
+    "Singapore": "SGP",
+    "Slovakia": "SVK",
+    "Slovenia": "SVN",
+    "South Africa": "ZAF",
+    "Spain": "ESP",
+    "Sweden": "SWE",
+    "Switzerland": "CHE",
+    "Turkiye": "TUR",               # FIXED spelling
+    "United Arab Emirates": "ARE",
+    "United Kingdom": "GBR",
+    "USA": "USA",                   # FIXED (dataset uses "USA")
 }
+
 
 # ---------------------------------------------------------------
 class WorldMapLineChart(anywidget.AnyWidget):
