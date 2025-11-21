@@ -8,17 +8,17 @@ from typing import Sequence, Optional
 
 class ParallelEnergy(anywidget.AnyWidget):
     """
-    Parallel coordinates con:
-      - Drag para reordenar ejes (líneas se mueven en vivo)
-      - Brush vertical por eje
-      - Slider de año
-      - Click para (de)seleccionar líneas
-      - Sync JS->PY en `selection` = {type, keys, rows}
+    Parallel coordinates with:
+      - Drag to reorder axes (lines move live)
+      - Vertical brush per axis
+      - Year slider
+      - Click to (de)select lines
+      - Sync JS->PY in `selection` = {type, keys, rows}
 
-    Métodos:
-      - selection_df()           -> DataFrame con lo seleccionado
-      - show_selection(head=None)-> imprime DF en la celda
-      - new_from_selection(**o)  -> nuevo ParallelEnergy solo con seleccionados
+    Methods:
+      - selection_df()           -> DataFrame with current selection
+      - show_selection(head=None)-> print DF in the cell
+      - new_from_selection(**o)  -> new ParallelEnergy with only selected rows
     """
 
     data = T.Dict(default_value={}).tag(sync=True)
@@ -39,8 +39,8 @@ class ParallelEnergy(anywidget.AnyWidget):
         log_axes: bool = False,
         normalize: bool = False,
         reorder: bool = True,
-        # NUEVO:
-        margin: Optional[dict] = None,            # dict(top,left,right,bottom) o t,l,r,b
+        # NEW:
+        margin: Optional[dict] = None,            # dict(top,left,right,bottom) or t,l,r,b
         panel_position: str = "right",            # "right" | "bottom"
         panel_width: int = 340,
         panel_height: int = 260,
@@ -50,14 +50,14 @@ class ParallelEnergy(anywidget.AnyWidget):
 
         years = [c for c in years if c in df.columns]
         if not years:
-            raise ValueError("years no coincide con columnas del dataframe.")
+            raise ValueError("years does not match dataframe columns.")
 
         dfn = df.copy()
         for y in years:
             dfn[y] = pd.to_numeric(dfn[y], errors="coerce")
 
         if tech_col not in dfn.columns or label_col not in dfn.columns:
-            raise KeyError("Faltan columnas requeridas.")
+            raise KeyError("Required columns are missing.")
 
         dims = list(dims)
         agg = (
@@ -81,7 +81,7 @@ class ParallelEnergy(anywidget.AnyWidget):
 
         self.data = {"years": list(years), "dims": dims, "records": recs, "label": label_col}
 
-        # opciones base
+        # base options
         self.options = {
             "width": int(width),
             "height": int(height),
@@ -89,13 +89,13 @@ class ParallelEnergy(anywidget.AnyWidget):
             "normalize": bool(normalize),
             "reorder": bool(reorder),
             "year_start": year_start if (year_start in years) else years[-1],
-            # NUEVO layout
+            # NEW layout
             "panel_position": panel_position,
             "panel_width": int(panel_width),
             "panel_height": int(panel_height),
         }
         if margin:
-            # admite keys: top/left/right/bottom o t/l/r/b
+            # accepts keys: top/left/right/bottom or t/l/r/b
             self.options["margin"] = {
                 "top":    margin.get("top",    margin.get("t", 105)),
                 "right":  margin.get("right",  margin.get("r", 260)),
@@ -103,7 +103,7 @@ class ParallelEnergy(anywidget.AnyWidget):
                 "left":   margin.get("left",   margin.get("l", 60)),
             }
 
-        # guardar estado para clonar
+        # save state to clone later
         self._df_raw = df.copy()
         self._years = list(years)
         self._tech_col = tech_col
@@ -113,15 +113,15 @@ class ParallelEnergy(anywidget.AnyWidget):
         self.selection = {}
 
     # ------------ helpers PY ------------
-# --- helpers Python-side ---
+    # --- helpers Python-side ---
     def selection_df(self):
-        """Devuelve la selección actual como DataFrame (puede estar vacío)."""
+        """Return current selection as DataFrame (may be empty)."""
         import pandas as pd
         return pd.DataFrame(self.selection.get("rows", []))
 
     def show_selection(self, head=None, *, return_df=False):
-        """Muestra la selección en la celda (opcional head=N).
-        Si return_df=True, además retorna el DataFrame (por defecto NO retorna nada)."""
+        """Show selection in the cell (optional head=N).
+        If return_df=True, also returns the DataFrame (by default returns None)."""
         from IPython.display import display
         df = self.selection_df()
         if head is not None:
@@ -129,15 +129,14 @@ class ParallelEnergy(anywidget.AnyWidget):
         display(df)
         return df if return_df else None
 
-
     def new_from_selection(self, **overrides):
 
         keys = list(map(str, self.selection.get("keys", [])))
         if not keys:
-            raise ValueError("No hay selección (keys vacío).")
+            raise ValueError("No selection (keys is empty).")
         sub = self._df_raw[self._df_raw[self._label_col].astype(str).isin(keys)].copy()
 
-        # toma defaults del gráfico actual, y deja que overrides gane
+        # take defaults from current chart; overrides wins
         kw = {
             "tech_col": self._tech_col,
             "label_col": self._label_col,
@@ -153,7 +152,5 @@ class ParallelEnergy(anywidget.AnyWidget):
             "panel_width": self.options.get("panel_width", 340),
             "panel_height": self.options.get("panel_height", 260),
         }
-        kw.update(overrides)  # overrides manda
+        kw.update(overrides)  # overrides wins
         return self.__class__(sub, self._years, **kw)
-
-       

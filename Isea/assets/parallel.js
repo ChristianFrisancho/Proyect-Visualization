@@ -10,7 +10,7 @@ export function render({ model, el }) {
     const YEARS = pack.years || [];
     let DIMS = (pack.dims || []).slice();
     const R = pack.records || [];
-    if (!YEARS.length || !DIMS.length || !R.length) { el.textContent = "Sin datos."; return; }
+    if (!YEARS.length || !DIMS.length || !R.length) { el.textContent = "No data."; return; }
 
     const mod = await import("https://cdn.jsdelivr.net/npm/d3@7/+esm");
     const d3 = mod.default ?? mod;
@@ -100,10 +100,10 @@ export function render({ model, el }) {
     // header
     const header = h("div", {}, leftTop);
     header.style.cssText = "display:flex;gap:12px;align-items:center;margin-bottom:6px;flex:0 0 auto;";
-    h("span", { textContent:"Año:", style:`font:${FS.header}px system-ui;color:#0f172a` }, header);
+    h("span", { textContent:"Year:", style:`font:${FS.header}px system-ui;color:#0f172a` }, header);
     const slider = h("input", {}, header); slider.type="range"; slider.min="0"; slider.max=String(YEARS.length-1); slider.value=String(idxYear); slider.style.width="300px";
     const yearLbl = h("span", { textContent: YEARS[idxYear], style:`font:${FS.header}px system-ui;color:#0f172a` }, header);
-    const helpBtn = h("button", { innerText:"¿Cómo interactuar?" }, header);
+    const helpBtn = h("button", { innerText:"How to interact?" }, header);
     Object.assign(helpBtn.style, { marginLeft:"auto", padding:"4px 9px", borderRadius:"10px", border:"1px solid #cbd5e1",
       background:"#f8fafc", color:"#0f172a", cursor:"pointer", font:`${FS.header}px system-ui` });
 
@@ -264,7 +264,7 @@ export function render({ model, el }) {
       items.append("rect").attr("width",10).attr("height",10).attr("rx",2).attr("fill", d=>color(d)).attr("y",3);
       items.append("text").attr("x",14).attr("y",12).text(d=>axisLabel(d)).style("font", `${FS.legend}px system-ui`).style("fill","#334155");
 
-      svg.append("text").attr("x",8).attr("y",14).text("Países seleccionados")
+      svg.append("text").attr("x",8).attr("y",14).text("Selected countries")
         .style("font", `600 ${FS.header}px system-ui`).style("fill","#0f172a");
     }
 
@@ -321,19 +321,19 @@ export function render({ model, el }) {
         border:"1px solid #1f2937", borderRadius:"14px", padding:"14px 16px", boxShadow:"0 16px 40px rgba(0,0,0,.35)", font:`${FS.legend}px/1.5 system-ui`, zIndex:9998 });
       const caret=h("div",{},card); caret.style.cssText="position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:8px solid #0b1220";
       card.innerHTML += `
-        <div style="font:600 ${FS.header+2}px system-ui; margin:4px 0 10px; color:#fff">Cómo interactuar</div>
+        <div style="font:600 ${FS.header+2}px system-ui; margin:4px 0 10px; color:#fff">How to interact</div>
         <ul style="margin:0 0 10px 18px; padding:0;">
-          <li><b>Arrastra</b> el <b>nombre del eje</b> para reordenar.</li>
-          <li><b>Brush</b> (arrastrar en un eje) para filtrar por rango.</li>
-          <li><b>Click</b> para (de)seleccionar; <b>Shift+Click</b> para múltiple.</li>
-          <li>Usa el <b>slider</b> para cambiar de año.</li>
+          <li><b>Drag</b> the <b>axis title</b> to reorder.</li>
+          <li><b>Brush</b> (drag on an axis) to filter by range.</li>
+          <li><b>Click</b> to (de)select; <b>Shift+Click</b> for multiple.</li>
+          <li>Use the <b>slider</b> to change the year.</li>
         </ul>
         <div style="display:flex; align-items:center; gap:12px; justify-content:space-between; margin-top:6px;">
           <label style="display:flex; align-items:center; gap:10px; user-select:none; color:#cbd5e1;">
             <input id="help-dont" type="checkbox" style="width:16px;height:16px;" />
-            <span>No volver a mostrar</span>
+            <span>Do not show again</span>
           </label>
-          <button id="help-ok" style="padding:6px 12px;border-radius:10px;border:1px solid #1f2937;background:#111827;color:#fff;cursor:pointer;">Entendido</button>
+          <button id="help-ok" style="padding:6px 12px;border-radius:10px;border:1px solid #1f2937;background:#111827;color:#fff;cursor:pointer;">Got it</button>
         </div>`;
       const close=()=>{ const dont=card.querySelector("#help-dont")?.checked; if(dont) localStorage.setItem(HELP_KEY,"1"); card.remove(); };
       const outside=e=>{ if(!card.contains(e.target) && e.target!==helpBtn){ cleanup(); close(); } };
