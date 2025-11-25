@@ -1,6 +1,6 @@
 // Isea/assets/energy_quad.js
 export function render({ model, el }) {
-  // -------- helper para crear nodos --------
+  // -------- helper to create nodes --------
   const h = (t, p = {}, parent) => {
     const n = document.createElement(t);
     Object.assign(n, p);
@@ -9,17 +9,17 @@ export function render({ model, el }) {
   };
 
   async function draw() {
-    // limpieza hard del host
+    // hard cleanup of host
     el.innerHTML = "";
 
-    // ---------- datos y opciones ----------
+    // ---------- data and options ----------
     const pack = model.get("data") ?? {};
     const opts = model.get("options") ?? {};
     const YEARS = pack.years || [];
     let DIMS = (pack.dims || []).slice();
     const R = pack.records || [];
     if (!YEARS.length || !DIMS.length || !R.length) {
-      el.textContent = "Sin datos.";
+      el.textContent = "No data.";
       return;
     }
 
@@ -27,18 +27,18 @@ export function render({ model, el }) {
     const mod = await import("https://cdn.jsdelivr.net/npm/d3@7/+esm");
     const d3 = mod.default ?? mod;
 
-    // ---------- dimensiones responsivas ----------
+    // ---------- responsive dimensions ----------
     const GAP = 12;
     const availW = Math.max(el.clientWidth || 0, 640);
     const targetW = Math.min(+opts.width || 1200, availW);
 
-    // columna derecha: proporción y tope
+    // right column: proportion and max
     const rShare   = Math.max(0.30, Math.min(+opts.right_share || 0.40, 0.60));
     const rightMax = +opts.right_width || 560;
     const rightW   = Math.min(Math.round(targetW * rShare), rightMax);
     const leftW    = targetW - rightW - GAP;
 
-    // alturas
+    // heights
     const row1H = +opts.left_height || 460;
     const row2H = Math.max(+opts.table_height || 180, +opts.mini_height || 260);
 
@@ -49,7 +49,7 @@ export function render({ model, el }) {
     let idxYear = YEARS.indexOf(opts.year_start ?? YEARS[YEARS.length - 1]);
     if (idxYear < 0) idxYear = YEARS.length - 1;
 
-    // ---------- helpers de datos ----------
+    // ---------- data helpers ----------
     function datasetFor(i) {
       return R.map(r => {
         const o = { Country: r.label, Year: YEARS[i] };
@@ -85,13 +85,13 @@ export function render({ model, el }) {
       return d;
     }
 
-    // ---------- color + tooltip ----------
+    // ---------- colors + tooltip ----------
     const color = d3.scaleOrdinal(
       ["Fossil", "Hydro", "Wind", "Solar", "Bio"],
       ["#60a5fa", "#f59e0b", "#ef4444", "#2dd4bf", "#9b59b6"]
     );
 
-    // tooltip único global (INVISIBLE al inicio)
+    // tooltip global (INVISIBLE at start)
     const tip = document.createElement("div");
     Object.assign(tip.style, {
       position: "fixed",
@@ -115,7 +115,7 @@ export function render({ model, el }) {
     };
     const hideTip = () => { tip.style.opacity = 0; };
 
-    // ---------- contenedor y grilla ----------
+    // ---------- container and grid ----------
     const frame = h("div", {}, el);
     frame.style.cssText = "overflow:auto;max-width:100%;";
     const grid = h("div", {}, frame);
@@ -125,19 +125,19 @@ export function render({ model, el }) {
 
     const cellCss = "position:relative;overflow:hidden;background:transparent;";
 
-    // fila 1
+    // row 1
     const leftTop  = h("div", {}, grid);  leftTop.style.cssText  = cellCss + `height:${row1H}px;display:flex;flex-direction:column;`;
     const rightTop = h("div", {}, grid);  rightTop.style.cssText = cellCss + `height:${row1H}px;`;
 
-    // fila 2
+    // row 2
     const leftBottom  = h("div", {}, grid);  leftBottom.style.cssText  = cellCss + `height:${row2H}px;`;
     const rightBottom = h("div", {}, grid);  rightBottom.style.cssText = cellCss + `height:${row2H}px;`;
 
-    // ---------- header con slider + botón de ayuda ----------
+    // ---------- header with slider + help button ----------
     const header = h("div", {}, leftTop);
     header.style.cssText = "display:flex;gap:12px;align-items:center;margin-bottom:6px;flex:0 0 auto;";
 
-    h("span", { textContent: "Año:", style: "font:13px system-ui;color:#0f172a" }, header);
+    h("span", { textContent: "Year:", style: "font:13px system-ui;color:#0f172a" }, header);
 
     const slider = h("input", {}, header);
     slider.type  = "range";
@@ -151,8 +151,8 @@ export function render({ model, el }) {
       style: "font:13px system-ui;color:#0f172a"
     }, header);
 
-    // botón ayuda (popover)
-    const helpBtn = h("button", { innerText: "¿Cómo interactuar?" }, header);
+    // help button (popover)
+    const helpBtn = h("button", { innerText: "How to interact?" }, header);
     Object.assign(helpBtn.style, {
       marginLeft: "auto",
       padding: "6px 10px",
@@ -162,12 +162,11 @@ export function render({ model, el }) {
       color: "#0f172a",
       cursor: "pointer"
     });
-
-    // contenedor del paralelo principal
+    // container of main parallel
     const mainContainer = h("div", {}, leftTop);
     mainContainer.style.cssText = `flex:1 1 auto;min-height:0;width:${leftW}px;`;
 
-    // ---------- constructor de parallel ----------
+    // ---------- parallel constructor ----------
     function makeParallel(root, width, height, { allowReorderHere }) {
       const svg = d3.select(root).append("svg")
         .attr("width", width).attr("height", height).style("display", "block");
@@ -350,7 +349,7 @@ export function render({ model, el }) {
       };
     }
 
-    // ---------- insight (líneas de share) ----------
+    // ---------- insight (share lines) ----------
     let updateInsightCursor = null;
     function renderInsight(selectedKeys) {
       rightTop.innerHTML = "";
@@ -363,7 +362,7 @@ export function render({ model, el }) {
 
       const g = svg.append("g").attr("transform", `translate(${m.l},${m.t})`);
 
-      // datos
+      // data
       const keys = new Set(selectedKeys || []);
       const series = DIMS.map(dim => {
         const values = YEARS.map((y, i) => {
@@ -401,7 +400,7 @@ export function render({ model, el }) {
         .attr("stroke", d => color(d.dim))
         .attr("stroke-width", 2);
 
-      // puntos con tooltip
+      // points with tooltip
       const pts = g.selectAll("g.pts").data(series).join("g")
         .attr("class", "pts").attr("fill", d => color(d.dim));
 
@@ -410,17 +409,17 @@ export function render({ model, el }) {
         .on("mousemove", (ev, d) => showTip(ev, `<b>${d.dim}</b> — ${d.year}<br>${d3.format(".1%")(d.share)}`))
         .on("mouseleave", hideTip);
 
-      // regla vertical ligada al año
+      // vertical rule linked to year
       const rule = g.append("line").attr("y1", 0).attr("y2", h)
         .attr("stroke", "#334155").attr("stroke-dasharray", "3,3");
       rule.attr("x1", x(idxYear)).attr("x2", x(idxYear));
       updateInsightCursor = () => { rule.attr("x1", x(idxYear)).attr("x2", x(idxYear)); };
 
-      // Leyenda: esquina superior derecha
+      // legend: top-right corner
       const lg = svg.append("g")
         .attr("transform", `translate(${m.l + w - 260},${m.t - 12})`);
 
-      // fondo suave para no tapar ticks
+      // soft background
       lg.append("rect")
         .attr("x", -10).attr("y", -6).attr("width", 260).attr("height", 22)
         .attr("rx", 10).attr("fill", "#f1f5f9").attr("stroke", "#e2e8f0");
@@ -433,27 +432,26 @@ export function render({ model, el }) {
       items.append("text").attr("x", 14).attr("y", 12)
         .text(d => d).style("font", "12px system-ui").style("fill", "#334155");
 
-      // título
+      // title
       svg.append("text")
         .attr("x", 10).attr("y", 16)
-        .text("Países seleccionados")
+        .text("Selected countries")
         .style("font", "600 13px system-ui")
         .style("fill", "#0f172a");
     }
-
-    // ---------- estado + sincronización ----------
+    // ---------- state + synchronization ----------
     let currentData = datasetYear(idxYear);
     let currentSelection = new Set();
 
     const calcMainH = () => Math.max(140, mainContainer.clientHeight || (row1H - 44));
 
-    // instancias paralelos (después de definir updateAll)
+    // parallel instances
     const main = makeParallel(mainContainer, leftW, calcMainH(), { allowReorderHere: allowReorder });
     const miniHost = h("div", {}, rightBottom);
     miniHost.style.cssText = `width:${rightW}px;height:100%;`;
     const mini = makeParallel(miniHost, rightW, row2H, { allowReorderHere: allowReorder });
 
-    // tabla
+    // table
     const tableWrap = h("div", {}, leftBottom);
     tableWrap.style.cssText =
       `height:100%;overflow:auto;border:1px solid #e2e8f0;border-radius:12px;` +
@@ -541,11 +539,11 @@ export function render({ model, el }) {
       renderTable(subset);
       renderInsight([...currentSelection]);
 
-      // Nunca dejar tooltips “pegados” tras actualizar
+      // Never leave tooltips “stuck” after update
       hideTip();
     }
 
-    // hooks de selección / reorder
+    // selection / reorder hooks
     main.setOnSelection(() => {
       const s = new Set((model.get("selection") || {}).keys || []);
       currentSelection = s; updateAll();
@@ -557,7 +555,7 @@ export function render({ model, el }) {
     const onReorder = (order) => { DIMS = order.slice(); updateAll(); };
     main.setOnReorder(onReorder); mini.setOnReorder(onReorder);
 
-    // slider año
+    // year slider
     slider.addEventListener("input", ev => {
       idxYear = +ev.target.value;
       yearLbl.textContent = YEARS[idxYear];
@@ -565,10 +563,10 @@ export function render({ model, el }) {
       if (updateInsightCursor) updateInsightCursor();
     });
 
-    // ---------- Ayuda tipo POPOVER (sin oscurecer) ----------
+    // ---------- Help popover ----------
     const HELP_KEY = "isea_vis_help_v1";
     function showHelp() {
-      // cerrar instancias anteriores
+      // close previous instances
       document.querySelectorAll(".isea-help").forEach(n => n.remove());
 
       const r = helpBtn.getBoundingClientRect();
@@ -599,22 +597,22 @@ export function render({ model, el }) {
         "border-bottom:8px solid #0b1220";
 
       card.innerHTML += `
-        <div style="font:600 18px system-ui; margin:4px 0 12px; color:#fff">Cómo interactuar</div>
+        <div style="font:600 18px system-ui; margin:4px 0 12px; color:#fff">How to interact</div>
         <ul style="margin:0 0 12px 18px; padding:0;">
-          <li><b>Arrastra el nombre del eje</b> para <b>reordenar</b>.</li>
-          <li><b>Brush</b> (arrastrar en un eje) para <b>filtrar</b> por rango.</li>
-          <li><b>Click</b> en una línea para (de)seleccionar; <b>Shift+Click</b> para múltiple.</li>
-          <li>Usa el <b>slider de año</b> (arriba) para cambiar el periodo.</li>
-          <li>Los <b>títulos de eje</b> tienen <b>tooltip</b> con explicación.</li>
+          <li><b>Drag the axis title</b> to <b>reorder</b>.</li>
+          <li><b>Brush</b> (drag on an axis) to <b>filter</b> by range.</li>
+          <li><b>Click</b> a line to (de)select; <b>Shift+Click</b> for multiple.</li>
+          <li>Use the <b>year slider</b> (above) to change the period.</li>
+          <li>Axis <b>titles</b> have <b>tooltips</b> with explanation.</li>
         </ul>
         <div style="display:flex; align-items:center; gap:12px; justify-content:space-between; margin-top:8px;">
           <label style="display:flex; align-items:center; gap:10px; user-select:none; color:#cbd5e1;">
             <input id="help-dont" type="checkbox" style="width:16px;height:16px;" />
-            <span>No volver a mostrar</span>
+            <span>Do not show again</span>
           </label>
           <button id="help-ok"
             style="padding:8px 14px;border-radius:10px;border:1px solid #1f2937;background:#111827;color:#fff;cursor:pointer;">
-            Entendido
+            OK
           </button>
         </div>
       `;
@@ -642,14 +640,14 @@ export function render({ model, el }) {
     helpBtn.addEventListener("click", showHelp);
     setTimeout(() => { if (localStorage.getItem(HELP_KEY) !== "1") showHelp(); }, 500);
 
-    // ---------- responsive: redibujar si cambia el ancho ----------
+    // ---------- responsive redraw ----------
     const ro = new ResizeObserver(() => {
       const w = Math.max(el.clientWidth || 0, 640);
       if (w !== targetW) draw();
     });
     ro.observe(el);
 
-    // ---------- primer render ----------
+    // ---------- first render ----------
     updateAll();
   }
 
