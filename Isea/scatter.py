@@ -13,9 +13,50 @@ except Exception:
 
 class ScatterBrush(anywidget.AnyWidget):
     """
-    Compact scatter widget with two-way binding and simple API.
-    - Syncs `data` and `options` to JS (assets/scatter.js)
-    - Receives JS->PY selections in `selection`
+    Interactive 2D scatterplot widget with brushing, tooltips and two-way binding.
+
+    This widget is a thin Python wrapper around a D3 scatterplot defined in
+    ``assets/scatter.js``. It synchronises three traitlets with the frontend:
+
+    - ``data``: list of records (one per point).
+    - ``options``: configuration dictionary controlling encodings and layout.
+    - ``selection``: object describing the current selection, written by JS.
+
+    Typical usage
+    -------------
+    You pass a pandas DataFrame or a list of dicts as ``data`` and specify
+    which columns should be used for the x/y axes and encodings:
+
+    .. code-block:: python
+
+        w = ScatterBrush(
+            df,
+            x="EV_sales_share",
+            y="EV_stock_share",
+            color="Region",
+            size="EV_stock_total",
+            label="Country",
+            key="id",
+            title="EV sales vs stock",
+            x_label="Sales share (%)",
+            y_label="Stock share (%)",
+        )
+
+    On the frontend you get:
+
+    - Zooming & panning.
+    - Rectangle brush selection.
+    - Legend (colour encoding).
+    - Point hover tooltips.
+    - Two-way binding of the selection state back into Python via
+      ``self.selection``.
+
+    The companion JavaScript reads:
+
+    - ``model.get("data")`` for the point list.
+    - ``model.get("options")`` for encodings and layout.
+    - Writes into ``model.set("selection", ...)`` and ``model.save_changes()``
+      whenever the selection changes.
     """
     data = T.List(default_value=[]).tag(sync=True)
     options = T.Dict(default_value={}).tag(sync=True)
@@ -53,6 +94,129 @@ class ScatterBrush(anywidget.AnyWidget):
         # dynamic XY candidates via XY_var* kwargs + any other overrides
         **overrides,
     ):
+        """
+        Create a scatterplot from a DataFrame or list of records.
+
+        Parameters
+        ----------
+        data :
+            Either:
+
+            - A :class:`pandas.DataFrame` with one row per point, or
+            - A sequence of dict-like records (e.g. ``[{"x": ..., "y": ...}, ...]``).
+
+            If a DataFrame is provided, it is converted to a list of JSON-like
+            dicts using ``data.to_json(orient="records")``. All values must be
+            JSON serialisable (numbers, strings, booleans, ``None``).
+
+        x, y : str, optional
+            Column names / keys to use for the x- and y-coordinates. If you
+            omit them, the JavaScript side falls back to its own defaults
+            (``"x"`` and ``"y"``).
+
+        label : str, optional
+            Name of the field used as a human-readable label (e.g. country
+            name). This is shown in tooltips and exported selection.
+
+        color : str, optional
+            Name of the categorical or numeric field used for colour
+            encoding. For categorical fields, the legend shows one entry
+            per unique value.
+
+        size : str, optional
+            Name of the numeric field used to scale marker radius.
+
+        key : str, optional
+            Stable identifier for each point. This is what the selection
+            returns in ``selection["keys"]`` and what :meth:`subset` uses
+            to filter a DataFrame. If omitted, the widget can still render,
+            but :meth:`subset` will fall back to ``label``.
+
+        title : str, optional
+            Title displayed above the chart.
+
+        x_label, y_label : str, optional
+            Axis labels; if omitted, the JS side may derive labels from
+            the field names.
+
+        width, height : int, optional
+            Pixel dimensions of the SVG. If left as ``None``, the JS code
+            uses its internal defaults (around 720×420).
+
+        radius : float, default 5.0
+            Base marker radius; combined with ``size`` if a size field is
+            provided.
+
+        opacity : float, default 0.92
+            Marker opacity between 0 (invisible) and 1 (fully opaque).
+
+        grid : bool, default True
+            Whether to draw grid lines aligned with the axes.
+
+        legend : bool, default True
+            Whether to show a legend for the colour encoding.
+
+        legend_position : {"right", "bottom"}, default "right"
+            Location of the legend relative to the scatter area.
+
+        palette : Sequence[str], optional
+            Custom list of colour codes (e.g. hex strings). Overrides the
+            default categorical palette in the JS implementation.
+
+        color_map : Mapping[str, str], optional
+            Explicit mapping from category value → colour string. This takes
+            precedence over ``palette`` for the matching categories.
+
+        margin : Mapping[str, int], optional
+            Custom margins around the plot. The JS code expects keys
+            ``"t"``, ``"r"``, ``"b"``, ``"l"`` (top/right/bottom/left) as
+            pixel integers, for example:
+
+            .. code-block:: python
+
+                margin={"t": 28, "r": 24, "b": 56, "l": 70}
+
+        x_ticks, y_ticks : int, optional
+            Desired number of ticks on the x- or y-axis. If not provided,
+            ticks are chosen automatically by D3.
+
+        log_x, log_y : bool, default False
+            If True, the corresponding axis uses a logarithmic scale where
+            possible; if False, a linear scale is used.
+
+        **overrides :
+            Extra options forwarded directly into ``self.options``. Two
+            special patterns are recognised:
+
+            - ``YearMin`` / ``YearMax``: if present, they are popped from
+              ``overrides`` and stored as integers in ``options["yearMin"]``
+              and ``options["yearMax"]``. The JS code can then use these to
+              highlight or filter a specific year range.
+
+            - ``XY_var*`` keys: any keyword whose name starts with
+              ``"XY_var"`` (case-insensitive) and has a truthy value is
+              collected into ``options["xyVars"]`` as an ordered list of
+              variable names. If this list is non-empty, the first element
+              becomes default ``x``, and the second (if any) becomes default
+              ``y``. This is how you drive a variable-selector UI from Python:
+
+              .. code-block:: python
+
+                  w = ScatterBrush(
+                      df,
+                      XY_var1="EV_sales_share",
+                      XY_var2="EV_stock_share",
+                      XY_var3="Charging_points_per_100k",
+                  )
+
+        Notes
+        -----
+        - ``self.data`` is always a plain list of dicts in "records" form.
+        - ``self.options`` is a flat dict consumed entirely by
+          ``assets/scatter.js``.
+        - ``self.selection`` starts as an empty dict and is updated by the
+          frontend when the user selects points.
+        """
         super().__init__()
         self._esm = (Path(__file__).parent / "assets" / "scatter.js").read_text(encoding="utf-8")
 
@@ -131,8 +295,61 @@ class ScatterBrush(anywidget.AnyWidget):
 
     def subset(self, df: "pd.DataFrame"):
         """
-        Convenience: return a filtered copy of df using current selection keys.
-        Requires `key` (or falls back to `label`) to exist in df.
+        Return a filtered copy of ``df`` based on the current selection keys.
+
+        This helper is meant to be called after the user has interacted with
+        the widget. The JavaScript code writes a list of selected point IDs
+        into ``self.selection["keys"]`` (as strings). ``subset`` then:
+
+        1. Reads ``keys = self.selection["keys"]``.
+        2. Determines which column in ``df`` should be used for matching:
+           first ``self.options["key"]`` if present, otherwise
+           ``self.options["label"]``.
+        3. Filters ``df`` to rows where that column, converted to string,
+           is in ``keys``.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Source DataFrame that contains at least one of the following
+            columns:
+
+            - The column whose name you passed as ``key`` when constructing
+              the widget, or
+            - If no key was specified, the column passed as ``label``.
+
+            The values in that column must match the identifiers stored in
+            ``self.selection["keys"]`` (typically strings).
+
+        Returns
+        -------
+        pandas.DataFrame
+            - If there is an active selection: a new DataFrame containing
+              only the selected rows.
+            - If there is no selection (``keys`` is empty): an empty DataFrame
+              with the same columns as ``df``.
+
+        Raises
+        ------
+        RuntimeError
+            If pandas is not available (the module ``pd`` could not be
+            imported).
+        ValueError
+            If neither a ``key`` nor a ``label`` encoding was configured
+            in ``self.options``.
+
+        Examples
+        --------
+        In a notebook:
+
+        .. code-block:: python
+
+            w = ScatterBrush(df, x="x", y="y", key="CountryCode")
+            display(w)
+
+            # After selecting some points in the plot:
+            selected = w.subset(df)
+            selected.head()
         """
         if pd is None:
             raise RuntimeError("pandas is required for subset().")

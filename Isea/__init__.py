@@ -1,3 +1,13 @@
+"""
+Public entry point for the Isea visualisation package.
+
+This module re-exports the main widget classes so they can be imported
+directly from :mod:`Isea`, for example:
+
+    from Isea import ScatterBrush, ParallelEnergy, EnergyQuad
+
+It also exposes the package version string as ``__version__``.
+"""
 # Isea/__init__.py
 from ._version import __version__
 from .base_widget import IseaWidget

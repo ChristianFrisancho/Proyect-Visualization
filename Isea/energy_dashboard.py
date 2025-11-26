@@ -7,9 +7,41 @@ import json
 
 def _load_energy_data():
     """
-    Carga Energy_clean.csv y transforma columnas F2000..F2023 en filas.
-    Devuelve dict:
-       { "rows": [...], "years": [...] }
+    Load the cleaned energy dataset and reshape it to a row-per-year format.
+
+    This helper looks for a CSV file named ``Energy_clean.csv`` in the same
+    folder as this module. The file is expected to have one row per
+    (country, technology, energy type) and one column per year with names
+    such as ``F2000``, ``F2001``, … up to ``F2023``. Typical columns are:
+
+    - ``ISO3``: three-letter country code (e.g. "NLD").
+    - ``Country``: human-readable country name.
+    - ``Technology``: generation technology or fuel type.
+    - ``Energy_Type``: high-level energy category.
+    - ``FYYYY``: numeric value for that year (e.g. "F2015").
+
+    The function converts these wide year columns into a list of records,
+    one record per (row, year) combination, with the following keys:
+
+    - ``ISO3``
+    - ``Country``
+    - ``Technology``
+    - ``Energy_Type``
+    - ``year`` (plain integer, e.g. 2015)
+    - ``Energy_Value`` (float; non-numeric values are coerced to 0)
+
+    Returns
+    -------
+    dict
+        A dictionary with two keys:
+
+        - ``"rows"``: list of per-year records as described above.
+        - ``"years"``: sorted list of all year values found in the file.
+
+    Notes
+    -----
+    This function is primarily intended for internal use by the dashboard,
+    but can be reused if you keep the same input CSV structure.
     """
     here = Path(__file__).parent
     csv_path = here / "Energy_clean.csv"
@@ -56,7 +88,25 @@ def _load_energy_data():
 
 
 def _load_assets():
-    """Carga style.css y JS desde assets."""
+    """Load CSS and JavaScript assets for the energy dashboard UI.
+
+    The assets are expected in a subfolder named ``assets`` next to
+    this Python file. The function:
+
+    - Reads ``style.css`` into a single CSS string (if it exists).
+    - Concatenates the contents of several JavaScript modules in
+      the following order, if they exist:
+
+      ``theme.js``, ``bubble_map.js``, ``sunburst.js``,
+      ``country_panel.js``, ``main.js``.
+
+    Returns
+    -------
+    tuple[str, str]
+        A pair ``(css, js)`` where ``css`` is the full stylesheet
+        and ``js`` is a single string with all JavaScript sources
+        concatenated in order.
+    """
     here = Path(__file__).parent
     assets = here / "assets"
 
@@ -81,6 +131,29 @@ def _load_assets():
 
 
 def _build_html():
+    """Construct the full HTML document for the energy dashboard.
+
+    This function pulls in the CSS and JavaScript assets via
+    :func:`_load_assets` and the processed energy data via
+    :func:`_load_energy_data`. It then embeds everything into a single
+    HTML string that can be rendered inside a Jupyter notebook.
+
+    The resulting HTML:
+
+    - Inlines the CSS in a ``<style>`` block.
+    - Creates the overall page layout (header, map, sunburst, panel).
+    - Injects the energy data as a global ``window.__ENERGY_DATA`` object
+      in a ``<script>`` tag.
+    - Loads D3 and TopoJSON from public CDNs.
+    - Appends the concatenated JavaScript modules that implement the
+      interactive behaviour on the client side.
+
+    Returns
+    -------
+    str
+        A complete HTML document as a string, ready to be passed to
+        :class:`IPython.display.HTML` or written to a standalone file.
+    """
     css, js = _load_assets()
     data = _load_energy_data()
 
@@ -145,4 +218,18 @@ window.__CURRENT_YEAR = 2023;
 
 
 def show_energy_dashboard():
+    """Display the interactive energy dashboard inside a Jupyter notebook.
+
+    This is the main entry point for end users. Calling this function in
+    a notebook cell will:
+
+    - Load the energy data from ``Energy_clean.csv`` (using
+      :func:`_load_energy_data`).
+    - Load the CSS and JavaScript assets from the local ``assets`` folder.
+    - Build the full HTML document with :func:`_build_html`.
+    - Render the dashboard inline via :func:`IPython.display.HTML`.
+
+    The function does not accept any parameters; it relies entirely on the
+    presence and structure of the CSV file and asset files on disk.
+    """
     display(HTML(_build_html()))
