@@ -1,12 +1,20 @@
 # Proyect-Visualization
 OPTION 1:
+
 STEP 1: Run this commands on terminal:
+
 pip install -U pip
+
 pip install anywidget traitlets
+
 pip install -e .
+
 run P6_deliverable_final.ipynb
+
 OPTION 2(more easy):
+
 Step 1 — Open Colab
+
 1. Go to 👉 [https://colab.research.google.com](https://colab.research.google.com)
 
 2. Create a new collab
@@ -33,28 +41,27 @@ Now create a new cell in Colab and paste:
 
 import pandas as pd
 
-# Load the dataset
+Load the dataset
+```python
 df = pd.read_csv("Global_EV_clean.csv")
+```
 
-# Check that it was loaded correctly
+Check that it was loaded correctly
+```python
 print("✅ File loaded successfully. Shape (rows, columns):", df.shape)
 df.head()
-
+```
 
 Step 3 — Basic exploratory analysis
 
 Create another cell and paste:
 
-# General information about the dataset
+```python
 df.info()
-
-# Check missing values
 print("\nMissing values per column:")
 print(df.isnull().sum())
-
-# Basic statistics
 df.describe()
-
+```
 
 This gives you a quick overview of the structure and quality of your data.
 
@@ -62,6 +69,7 @@ Step 4 — Descriptive visualizations
 
 Initial plots to understand the global distribution of the data:
 
+```python
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -80,35 +88,11 @@ plt.ylabel("Number of records")
 plt.xticks(rotation=45)
 plt.show()
 
-
-You can adjust the column names ("Year", "Country") if your dataset uses different names.
+```
 
 Step 5 — Global interactive map with isea-vis
 
-This step assumes your CSV contains at least the following columns:
-
-Country
-
-Year
-
-A metric such as EV_Sales
-
-A metric such as EV_Share
-
-Create a new cell and paste:
-
-import isea
-
-# Inspect the available columns
-print(df.columns)
-
-# NOTE:
-# Adjust the column names below according to your dataset.
-# Example:
-#   - 'EV_Share'  -> 'Market Share (%)'
-#   - 'EV_Sales'  -> 'Units_Sold'
-
-# Simple interactive scatter/map visualization
+```python
 scatter = isea.scatter(
     data=df,
     x='Year',
@@ -119,16 +103,13 @@ scatter = isea.scatter(
 )
 
 scatter
+```
 
-
-⚠️ If your columns have different names, replace them in the block above.
-Example: "EV_Share" → "EV_Penetration", "EV_Sales" → "Units_Sold".
-
-🌍 Step 6 — “World Line Chart” map
+Step 6 — “World Line Chart” map
 
 Create a new cell and paste:
 
-# World line chart: EV market share trend by country
+```python
 chart = isea.worldmaplinechart(
     data=df,
     geo_key='Country',
@@ -138,15 +119,13 @@ chart = isea.worldmaplinechart(
 )
 
 chart
+```
 
-
-Again, adjust column names as needed.
 
 Step 7 — "Energy Quad" multidimensional visualization
 
 Create another cell and paste:
-
-# Multidimensional "energy quad" visualization
+```python
 quad = isea.energyquad(
     data=df,
     x='EV_Sales',
@@ -157,13 +136,14 @@ quad = isea.energyquad(
 )
 
 quad
-
+```
 
 
 Step 8 — Comparative line chart with Plotly
 
 Create a new cell and paste:
 
+```python
 import plotly.express as px
 
 fig = px.line(
@@ -176,6 +156,7 @@ fig = px.line(
 
 fig.show()
 
+```
 
 This will create an interactive line chart comparing EV market share over time by country.
 
