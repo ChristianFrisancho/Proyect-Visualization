@@ -30,7 +30,7 @@ Assume your dataset is called `Global_EV_clean.csv`:
 
 Now create a new cell in Colab and paste:
 
-```python
+
 import pandas as pd
 
 # Load the dataset
@@ -41,7 +41,7 @@ print("✅ File loaded successfully. Shape (rows, columns):", df.shape)
 df.head()
 
 
-🧭 Step 3 — Basic exploratory analysis
+Step 3 — Basic exploratory analysis
 
 Create another cell and paste:
 
