@@ -39,16 +39,16 @@ Assume your dataset is called `Global_EV_clean.csv`:
 Now create a new cell in Colab and paste:
 
 
-import pandas as pd
-
 Load the dataset
 ```python
-df = pd.read_csv("Global_EV_clean.csv")
+import pandas as pd
+import re
+df = pd.read_csv("Renewable_Energy.csv")
 ```
 
 Check that it was loaded correctly
 ```python
-print("✅ File loaded successfully. Shape (rows, columns):", df.shape)
+print(" File loaded successfully loaded:", df.shape)
 df.head()
 ```
 
@@ -65,98 +65,209 @@ df.describe()
 
 This gives you a quick overview of the structure and quality of your data.
 
-Step 4 — Descriptive visualizations
+Step 4 — making the dataset ready to be used
 
-Initial plots to understand the global distribution of the data:
+Configuration of the dataset for a correct run:
 
 ```python
-import matplotlib.pyplot as plt
-import seaborn as sns
+f = df
+iso2_clean = f["ISO2"].astype(str).str.strip()
+f = f[iso2_clean.ne("") & f["ISO2"].notna()].copy()
+year_cols = sorted([c for c in f.columns if re.fullmatch(r"F\d{4}", c)])
+for c in year_cols:
+    f[c] = pd.to_numeric(f[c], errors="coerce")
+tech_map = {
+    "Hydropower (excl. Pumped Storage)": "Hydro",
+    "Solar energy": "Solar",
+    "Wind energy": "Wind",
+    "Bioenergy": "Bio",
+    "Fossil fuels": "Fossil",
+}
+f["Technology_std"] = f["Technology"].map(tech_map).fillna(f["Technology"])
 
-plt.figure(figsize=(10, 5))
-sns.histplot(df['Year'], bins=20, kde=True)
-plt.title("Distribution of records per year")
-plt.xlabel("Year")
-plt.ylabel("Frequency")
-plt.show()
+def extract_abbr(unit: str):
+    if not isinstance(unit, str):
+        return None
+    m = re.search(r"\b(MW|GWh)\b", unit, flags=re.IGNORECASE)
+    return m.group(1).upper() if m else None
+f["UnitAbbr"] = f["Unit"].apply(extract_abbr)
+f = f[f["UnitAbbr"].notna()].copy()
+f["TechUnit"] = f["Technology_std"].astype(str).str.strip() + " (" + f["UnitAbbr"] + ")"
+def add_continent_from_iso2(df: pd.DataFrame) -> pd.DataFrame:
+    s = df["ISO2"].astype(str).str.strip().str.upper().replace({"": None, "NA": None, "NAN": None})
+    import country_converter as coco
+    cc = coco.CountryConverter()
+    cont_list = cc.convert(names=s.tolist(), src="ISO2", to="continent", not_found=None)
+    cont_series = pd.Series(cont_list, index=df.index)
+    df["Continent"] = cont_series.fillna("Unknown")
+    return df
 
-plt.figure(figsize=(12, 6))
-top_countries = df['Country'].value_counts().head(10)
-sns.barplot(x=top_countries.index, y=top_countries.values)
-plt.title("Top 10 countries with the most EV records")
-plt.ylabel("Number of records")
-plt.xticks(rotation=45)
-plt.show()
+    
+    from pycountry_convert import (
+        country_alpha2_to_continent_code as a2_to_cc,
+        convert_continent_code_to_continent_name as cc_to_name,
+    )
+    def conv(a2):
+      return cc_to_name(a2_to_cc(a2))
+
+    cont_series = s.map(conv).fillna("Unknown")
+    df["Continent"] = cont_series
+    return df
+f = add_continent_from_iso2(f)
+if "ObjectId" not in f.columns:
+    f["ObjectId"] = range(1, len(f) + 1)
+
+
+agg = f.groupby(["Country","Continent","TechUnit"], as_index=False)[year_cols].sum()   
+long = agg.melt(id_vars=["Country","Continent","TechUnit"],                             
+                value_vars=year_cols, var_name="YearCol", value_name="Value")
+long["col"] = long["TechUnit"] + "__" + long["YearCol"]
+wide = (long.pivot_table(index=["Country","Continent"], columns="col",             
+                         values="Value", aggfunc="sum")
+            .reset_index()
+            .fillna(0.0))
+
+df_wide = wide  
+tech_options = sorted(f["TechUnit"].unique().tolist()) 
+xy_kwargs = {f"XY_var{i+1}": t for i, t in enumerate(tech_options)} 
+
+print(f"Wide shape: {df_wide.shape}  | TechUnits: {len(tech_options)}  | Years: {len(year_cols)}")
+
+continent_colors = {
+    "Asia": "#1f77b4",
+    "Europe": "#ff7f0e",
+    "Africa": "#2ca02c",
+    "Oceania": "#d62728",
+    "America": "#9467bd",
+}
+
+df_wide
 
 ```
 
-Step 5 — Global interactive map with isea-vis
+Step 5 — Scatter visualization with isea-vis
 
 ```python
-scatter = isea.scatter(
-    data=df,
-    x='Year',
-    y='EV_Share',       # <- change if your dataset uses another name
-    color='Country',
-    size='EV_Sales',    # <- change if your dataset uses another name
-    title='Global evolution of electric vehicles'
+from Isea.scatter import ScatterBrush
+import re
+
+
+years_int = sorted({int(m.group(1)) for c in df_wide.columns
+                    for m in [re.search(r"__F(\d{4})$", str(c))] if m})
+year_min, year_max = years_int[0], years_int[-1]
+
+
+xy_kwargs = {f"XY_var{i+1}": t for i, t in enumerate(tech_options, start=1)}
+
+rows = df_wide.to_dict("records")   
+
+w_scatter = ScatterBrush(
+    data=rows,
+    x=tech_options[1], y=tech_options[3],
+    color="Continent",
+    colorMap=continent_colors,
+    label="Country",    
+    key="Country",      
+    width=1200, height=500,
+    panel_position="right", panel_width=320, panel_height=220,
+    YearMin=year_min, YearMax=year_max,
+    **xy_kwargs,
 )
-
-scatter
+display(w_scatter)
 ```
+If you want the same graph but with countries selected you can use this:
+```python
 
+opts = getattr(w_scatter, "options", {}) or {}
+x_col = getattr(w_scatter, "x", None) or opts.get("x")
+y_col = getattr(w_scatter, "y", None) or opts.get("y")
+label_col = getattr(w_scatter, "label", None) or opts.get("label") or "Country"
+color_col = getattr(w_scatter, "color", None) or opts.get("color") or "Continent"
+key_col   = getattr(w_scatter, "key", None)   or opts.get("key")   or "Country"
+xy_kwargs = {f"XY_var{i+1}": t for i, t in enumerate(tech_options, start=1)}
+w_scatter_sel = ScatterBrush(
+    data=pd.DataFrame([], columns=[label_col, color_col, key_col]).to_dict("records"),
+    x=x_col, y=y_col,
+    color=color_col,colorMap=continent_colors,
+    label=label_col, key=key_col,
+    width=900, height=450, panel_position="right", panel_height=160,
+    YearMin=year_min, YearMax=year_max,
+    **xy_kwargs,
+)
+display(w_scatter_sel)
+df_selected = pd.DataFrame(columns=df_wide.columns)
+
+
+def _link_selection_to_second(change):
+    global df_selected
+    sel = change.get("new") or {}
+    rows = sel.get("rows") or []
+    countries = [r.get("Country") or r.get(label_col) or r.get(key_col) for r in rows]
+    countries = [c for c in countries if isinstance(c, str)]
+
+    if countries:
+        df_selected = df_wide[df_wide["Country"].isin(countries)].copy()
+    else:
+        df_selected = pd.DataFrame(columns=df_wide.columns)
+    cur_x = getattr(w_scatter, "x", None) or opts.get("x")
+    cur_y = getattr(w_scatter, "y", None) or opts.get("y")
+    w_scatter_sel.data = (
+        df_selected.assign(key=lambda d: d["Country"], label=lambda d: d["Country"])
+                   .to_dict("records")
+    )
+    if cur_x and cur_y:
+        w_scatter_sel.x = cur_x
+        w_scatter_sel.y = cur_y
+    w_scatter_sel.selection = {"type": None, "keys": [], "rows": [], "epoch": int(__import__("time").time()*1000)}
+
+w_scatter.observe(_link_selection_to_second, names="selection")
+```
 Step 6 — “World Line Chart” map
 
 Create a new cell and paste:
 
 ```python
-chart = isea.worldmaplinechart(
-    data=df,
-    geo_key='Country',
-    x='Year',
-    y='EV_Share',
-    title='EV market share trend by country'
+from Isea import WorldRenewable
+from IPython.display import display
+
+df_world = df
+year_cols = [c for c in df_world.columns if c.startswith("F")]
+for c in year_cols:
+    df_world[c] = pd.to_numeric(df_world[c], errors="coerce")
+
+tech_map = {
+    "Hydropower (excl. Pumped Storage)": "Hydro",
+    "Solar energy": "Solar",
+    "Wind energy": "Wind",
+    "Bioenergy": "Bio",
+    "Fossil fuels": "Fossil",
+}
+df_world["Technology_std"] = df_world["Technology"].map(tech_map).fillna(df_world["Technology"])
+world_widget = WorldRenewable(
+    df=df_world,
+    year_cols=year_cols,
+    country_col="Country",
+    iso3_col="ISO3",
+    tech_col="Technology_std",
+    start_year="F2023", 
+    width=1200,
+    height=660,
+    normalize=False
 )
 
-chart
+display(world_widget)
+print(" WorldRenewable widget created successfully!")
+
+def on_world_selection(change):
+    sel = change["new"]
+    if sel and sel.get("iso3"):
+        year = sel.get('year', 'N/A')
+        value = sel.get('value')
+        value_str = f"{value:.1%}" if value is not None else "N/A"
+        print(f"Selected: {sel['name']} ({sel['iso3']}) - Year {year} - Renewable: {value_str}")
+
+world_widget.observe(on_world_selection, names="selection")
 ```
 
-
-Step 7 — "Energy Quad" multidimensional visualization
-
-Create another cell and paste:
-```python
-quad = isea.energyquad(
-    data=df,
-    x='EV_Sales',
-    y='EV_Share',
-    color='Region',
-    size='Population',  # <- if your dataset has a 'Population' column
-    title='Relationship between EV sales, market share and region'
-)
-
-quad
-```
-
-
-Step 8 — Comparative line chart with Plotly
-
-Create a new cell and paste:
-
-```python
-import plotly.express as px
-
-fig = px.line(
-    df,
-    x="Year",
-    y="EV_Share",
-    color="Country",
-    title="Evolution of electric vehicle market share by country"
-)
-
-fig.show()
-
-```
-
-This will create an interactive line chart comparing EV market share over time by country.
+With this , you can create 2 interactive visualizations and we and if you liked it, we invite you to see the other graphics that are on our ipynb page on our GitHub.
 
