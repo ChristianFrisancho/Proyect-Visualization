@@ -1,0 +1,29 @@
+site_name: iSea - Library for energy visualizations
+site_description: 'An interactive dashboard exploring the global transition to electric mobility.'
+site_author: 'Alex, Chris, Marcelo, Milan'
+
+theme:
+  name: material
+  palette:
+    primary: 'blue'
+    accent: 'light blue'
+  features:
+    - navigation.tabs
+    - navigation.top
+    - search.suggest
+
+# Estructura de la navegación del sitio
+nav:
+  - 'Home': 'index.md'
+  - 'Visualizations':
+    - 'Overview': 'visualizations/visualizations.md'
+    - 'World Map & Line Chart': 'visualizations/world_map.md'
+    - 'Diagnostic Scatter Plot': 'visualizations/scatter_plot.md'
+    - 'Parallel Coordinates Plot': 'visualizations/parallel_plot.md'
+    - 'Bubble Chart': 'visualizations/bubble_chart.md'
+    - 'Heatmap Chart': 'visualizations/heatmap_chart.md'
+    - 'Trendline Chart': 'visualizations/trendline_chart.md'
+    - 'Advanced Analysis Panel': 'visualizations/ml_panel.md'
+  - 'Tutorials':
+    - 'Transition Pressure Analysis': 'tutorials/transition.md'
+    - 'Infrastructure Alignment Analysis': 'tutorials/infrastructure.md'
